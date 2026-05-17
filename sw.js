@@ -41,6 +41,8 @@ const CDN_PRECACHE = [
   'https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.16.9/katex.min.css',
   'https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.16.9/katex.min.js',
   'https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js',
+  // MathLive — structural math editor used by every math-primary input
+  'https://cdn.jsdelivr.net/npm/mathlive@0.99.0/dist/mathlive.min.js',
 ];
 
 const NETWORK_ONLY = [

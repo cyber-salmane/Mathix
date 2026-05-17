@@ -40,6 +40,12 @@
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.16.9/katex.min.css">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.16.9/katex.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<!-- MathLive — modern structural math editor (MathQuill replacement).
+     Drives every math-primary input in the app: fractions stack live, exponents
+     rise as you type, roots draw real radicals. Loaded `defer` so it doesn't
+     block first paint; setupMathField() awaits customElements.whenDefined()
+     before instantiating. -->
+<script defer src="https://cdn.jsdelivr.net/npm/mathlive@0.99.0/dist/mathlive.min.js"></script>
 <style>
 :root {
   --bg: #04040d;
@@ -320,136 +326,301 @@ html[data-font="large"]  .step-math{font-size:15px}
 html[data-font="large"]  .step-why{font-size:14px}
 html[data-font="large"]  .chat-msg .bubble{font-size:14px}
 
-/* ── Math input UX (overlay model) ──
-   The rendered mathematics IS the visible state of a math input. The raw
-   textarea/input lives in the same physical space but only becomes
-   visible while the user is actively editing. Transitions are pure
-   opacity crossfades, no layout jump.
+/* ── Math input system (MathLive structural editor) ──
+   Every math-primary input in the app is a <math-field>. Users type and
+   the field re-flows live: fractions stack, exponents rise, radicals
+   draw. There is NO separate "raw text" vs "rendered" mode — the field
+   IS the math.
+   The original <textarea>/<input> elements remain in the DOM as hidden
+   mirrors. They hold the math.js-compatible plain-text serialization
+   that the rest of the app (parser, sync, AI prompts, history, AI chat)
+   already speaks. The mirror updates whenever the math-field changes,
+   firing the same `input` event existing code already listens for. */
+/* Wrapper around every math-field — owns the quick-actions row, ensures
+   the field properly fills its host (especially inside flex rows like the
+   practice answer row or the graph fn-input row). */
+.mf-wrap{display:flex;flex-direction:column;gap:6px;min-width:0;flex:1 1 auto;position:relative}
+.mf-wrap.mf-compact-wrap{gap:0}
 
-   Three cooperating pieces:
-     .mi-wrap        — positioned container, hosts both layers
-     <textarea|input>.mi-target — the always-source-of-truth raw text
-     .mi-display     — KaTeX-rendered overlay, click-to-edit
-     .mi-trigger     — small ƒ button that opens the symbol popover
-
-   States (driven by data-state on .mi-wrap):
-     empty     — no content yet; show textarea with placeholder
-     editing   — textarea focused; show textarea
-     rendered  — content + blurred; show .mi-display, hide textarea
-
-   The textarea remains in the DOM at full size in every state so
-   focus/caret semantics never break; only opacity + pointer-events
-   change. */
-.mi-wrap{position:relative;display:flex;flex-direction:column;flex:1 1 auto;min-width:0;isolation:isolate}
-.mi-trigger{
-  position:absolute;top:8px;right:8px;
-  width:30px;height:30px;border-radius:8px;flex-shrink:0;z-index:3;
-  background:var(--s2);border:1px solid var(--border2);
-  color:var(--text2);font-family:var(--serif);font-style:italic;
-  font-size:14px;cursor:pointer;display:flex;align-items:center;justify-content:center;
-  transition:background .15s,color .15s,border-color .15s,transform .08s;
-  -webkit-tap-highlight-color:transparent;line-height:1;padding:0;
-}
-.mi-trigger:hover{background:var(--s3);color:var(--accent2);border-color:rgba(124,93,249,.4)}
-.mi-trigger:active{transform:scale(.92)}
-.mi-trigger.open{background:rgba(124,93,249,.18);border-color:var(--accent);color:var(--accent2)}
-/* Reserve right padding for the trigger so cursor/text never slides under it. */
-.mi-wrap > input.mi-target,
-.mi-wrap > textarea.mi-target{padding-right:46px !important}
-.mi-wrap > textarea.mi-target,
-.mi-wrap > input.mi-target{
-  position:relative;z-index:1;
-  /* The underlying input stays at opacity 1 always — the display overlays
-     it when "rendered". This means the input's background is always
-     present so there's no transparency flash during the crossfade. */
-}
-/* The rendered-math overlay sits in the exact same physical box as the
-   textarea. It has its OWN background that matches the input so the
-   display–textarea swap visually replaces one chrome with another
-   identical one, no flash. */
-.mi-display{
-  position:absolute;inset:0;z-index:2;
-  display:flex;align-items:center;
-  padding:14px 46px 14px 18px;
-  background:var(--s2);border:1px solid var(--border2);
+math-field{
+  display:block;width:100%;min-width:0;flex:1 1 auto;
+  background:var(--s2);
+  border:1px solid var(--border2);
   border-radius:12px;
-  cursor:text;overflow:hidden;
-  pointer-events:none;opacity:0;
-  transition:opacity .14s ease,border-color .15s;
-  -webkit-user-select:none;user-select:none;
+  padding:13px 16px;
+  color:var(--text);
+  font-size:18px;
+  /* line-height is intentionally NOT set here — MathLive's content uses
+     a calibrated internal line-height for math stacking (fraction num/den
+     spacing, exponent rise, radical depth). The outer math-field's height
+     is naturally driven by the rendered content, not by a fixed leading. */
+  outline:none;
+  transition:border-color .15s;
+  /* ─ MathLive CSS variables ─ keep every internal surface on-brand ─ */
+  --primary:var(--accent);
+  --highlight:rgba(124,93,249,.2);
+  /* Caret + selection */
+  --caret-color:var(--accent2);
+  --keystroke-caret-color:var(--accent2);
+  --selection-color:var(--text);
+  --selection-background-color:rgba(124,93,249,.35);
+  --selection-background-color-focused:rgba(124,93,249,.42);
+  --contains-highlight-color:rgba(124,93,249,.10);
+  /* Placeholders (the ▢ inside fractions/roots/exponents) */
+  --placeholder-color:var(--text3);
+  --placeholder-opacity:.55;
+  /* Smart-fence guides (when smart-fence is auto-pairing) */
+  --smart-fence-color:rgba(124,93,249,.4);
+  --smart-fence-opacity:.4;
+  /* No native focus ring; we use border-color on the field instead. */
+  --field-focus-ring-color:transparent;
+  --error-color:var(--red);
+  --correct-color:var(--green2);
+  --incorrect-color:var(--red);
+  /* ─ Virtual-keyboard theming (mobile) ─ */
+  --keyboard-background:var(--s1);
+  --keyboard-text:var(--text);
+  --keyboard-text-active:var(--accent2);
+  --keyboard-accent-color:var(--accent);
+  --keyboard-toolbar-text:var(--text2);
+  --keyboard-toolbar-text-active:var(--accent2);
+  --keyboard-toolbar-background:var(--s2);
+  --keyboard-toolbar-background-hover:var(--s3);
+  --keyboard-toolbar-background-selected:rgba(124,93,249,.18);
+  --keycap-background:var(--s2);
+  --keycap-background-hover:var(--s3);
+  --keycap-background-active:rgba(124,93,249,.22);
+  --keycap-background-pressed:rgba(124,93,249,.3);
+  --keycap-text:var(--text);
+  --keycap-text-active:var(--accent2);
+  --keycap-text-hover:var(--text);
+  --keycap-text-pressed:#fff;
+  --keycap-secondary-text:var(--text3);
+  --keycap-modifier-background:var(--s3);
+  --keycap-modifier-border:var(--border2);
+  --keycap-border:var(--border2);
+  --keycap-border-bottom:var(--border2);
+  --keycap-shift-color:var(--accent2);
+  --keycap-shift-text:var(--accent2);
+  --variant-panel-background:var(--s1);
 }
-.mi-display-inner{
-  display:flex;align-items:center;
-  width:100%;min-width:0;
-  /* Long expressions can scroll horizontally inside the display, but the
-     scrollbar is hidden by default — users still drag-scroll on touch. */
+math-field:focus,math-field:focus-within{border-color:var(--accent)}
+math-field::part(virtual-keyboard-toggle){display:none}
+math-field::part(menu-toggle){display:none}
+/* (background-only ::part rules for content/container live further down,
+   grouped with the other background-clearing rules — kept together for
+   easier maintenance.) */
+/* IMPORTANT: do NOT override `::part(content) { font-size: inherit }` —
+   that rule was the cause of the rendering regression. MathLive's content
+   part uses a precisely-calibrated font-size hierarchy (exponents render
+   at ~0.7em, sub-exponents smaller still, fraction numerator/denominator
+   at specific scales). Forcing inherit collapsed every level to the
+   outer 18px, so fractions/exponents/radicals rendered visually as flat
+   text. The outer math-field font-size (18px) cascades naturally to the
+   content part without an explicit override. */
+/* Hide internal scrollbars on the math-field and ALL descendants. Long
+   expressions are still pannable via touch / arrow keys, but no visible
+   browser scrollbar appears anywhere inside the editor. The wildcard
+   descendant selector catches whichever class MathLive uses for its
+   scroll container across versions (ML__container, ML__fieldcontainer,
+   ML__fieldcontainer__field, etc.) without us having to chase API changes. */
+math-field,math-field *{scrollbar-width:none !important;-ms-overflow-style:none !important}
+math-field::-webkit-scrollbar,
+math-field *::-webkit-scrollbar{display:none !important;width:0 !important;height:0 !important;background:transparent !important}
+/* Multi-line fields (calc + solver) — taller minimum height. */
+math-field.mf-multiline{min-height:64px}
+/* Compact variant — graph fn-input rows. */
+math-field.mf-compact{
+  font-size:14px;
+  padding:7px 10px;
+  border-radius:7px;
+  flex:1 1 auto;min-width:0;
+  min-height:0;
+}
+
+/* ─ INTERNAL DOM THEMING ─
+   MathLive renders its internals with ML__* classes. Theming is done
+   surgically — each KNOWN element that has a non-themed default color
+   gets a specific rule. We deliberately do NOT mass-override `*` spans
+   or color/background on every descendant — that was the cause of the
+   "fractions/exponents look flat" regression, because MathLive's typography
+   relies on its own size/color cascade for stacked structures. */
+/* Math text color inherits from math-field (already set on the outer element)
+   so we do NOT need a universal `math-field * { color: ... }` rule. */
+
+/* Universal-descendant transparent override on math-field internals. The
+   white blocks visible inside fractions / √ / sin / cos / tan / log /
+   nested structures come from MathLive's bundled CSS painting a light
+   background on internal spans that aren't all under the `[class*="ML__"]`
+   prefix we used previously (some have no class, inline `style="..."`, or
+   different naming conventions across MathLive versions). A universal
+   descendant background reset catches every layer.
+   IMPORTANT — this affects background-color and background-image ONLY. It
+   does NOT touch font-size, line-height, display, position, transform, or
+   any typography-critical property (those caused the rendering regression
+   documented at line 419 — read that comment before changing this rule).
+   Specificity: `math-field *` = (0,0,1). The targeted purple highlight
+   rules below — `math-field .ML__placeholder--selected` etc. — have
+   specificity (0,1,1) and ALWAYS win over this rule regardless of source
+   order, so the intentional purple structural tints stay intact. */
+math-field *{background-color:transparent !important;background-image:none !important;box-shadow:none !important}
+/* Pseudo-elements MathLive may use for caret / decorative overlays. The
+   universal `*` selector above does NOT match `::before` / `::after`, so
+   they need an explicit rule. Background-only; no positional or sizing
+   properties touched. */
+math-field *::before,math-field *::after{background-color:transparent !important;background-image:none !important;box-shadow:none !important}
+/* Internal MathLive control elements that don't carry an ML__ class. The
+   library uses an invisible `<textarea>` (the "keyboard sink") to receive
+   key events; some versions render it with a default white background that
+   becomes visible if the offscreen positioning gets disrupted. Forcing it
+   fully transparent here is harmless — its visibility was never wanted. */
+math-field textarea,math-field input,math-field canvas,math-field svg{background-color:transparent !important;background-image:none !important}
+/* Additional exposed parts. We already hide the virtual-keyboard-toggle
+   and menu-toggle; force-transparent the content/container parts so any
+   light default ships from MathLive's bundled CSS is overridden. */
+math-field::part(content),math-field::part(container){background-color:transparent !important;background-image:none !important}
+/* Placeholder character (the ▢ inside an empty slot of \frac{} / \sqrt{} / ^{}). */
+.ML__placeholder,
+math-field .ML__placeholder,
+math-field .ML__inserted-placeholder,
+math-field .ML__placeholder__inner{
+  color:var(--text3) !important;
+  background:transparent !important;
+  opacity:.55 !important;
+}
+.ML__placeholder--selected,
+math-field .ML__placeholder--selected{
+  background:rgba(124,93,249,.28) !important;
+  color:var(--accent2) !important;
+  opacity:1 !important;
+}
+/* Editable prompts (used for fill-in templates). Tinted purple, dashed border. */
+.ML__prompt,
+math-field .ML__prompt{
+  color:var(--text) !important;
+  background:rgba(124,93,249,.08) !important;
+  border:1px dashed rgba(124,93,249,.35) !important;
+  border-radius:4px !important;
+  padding:0 3px !important;
+}
+.ML__prompt[data-placeholder]:empty::before{
+  color:var(--text3) !important;opacity:.55 !important;
+}
+/* Caret */
+.ML__caret,.ML__text-caret,
+math-field .ML__caret,math-field .ML__text-caret{
+  color:var(--accent2) !important;
+  border-color:var(--accent2) !important;
+  background:var(--accent2) !important;
+}
+/* Selection */
+.ML__selection,
+math-field .ML__selection{
+  background:rgba(124,93,249,.35) !important;
+  color:var(--text) !important;
+}
+/* "Contains highlight" — the soft wash on the structure containing the caret. */
+.ML__contains-highlight,
+.ML__contains-highlight-strong,
+math-field .ML__contains-highlight,
+math-field .ML__contains-highlight-strong{
+  background:rgba(124,93,249,.08) !important;
+  color:inherit !important;
+}
+/* Smart-fence guide marks (the faint guide-rails when auto-paired parens) */
+.ML__smart-fence-close,
+.ML__smart-fence,
+math-field .ML__smart-fence-close,
+math-field .ML__smart-fence{
+  color:rgba(124,93,249,.45) !important;
+  opacity:.55 !important;
+  background:transparent !important;
+}
+/* The fraction bar — keep it visible in the right color. */
+math-field .ML__frac-line{
+  border-bottom-color:var(--text2) !important;
+}
+/* Root symbols — make sure the bar reads. */
+math-field .ML__sqrt-line{
+  border-top-color:var(--text2) !important;
+}
+/* Error tokens (invalid math): tone down the default red flash */
+math-field .ML__error{
+  color:var(--red) !important;
+  border-bottom-color:var(--red) !important;
+  background:transparent !important;
+}
+/* Virtual keyboard chrome */
+.ML__keyboard{background:var(--s1) !important;color:var(--text) !important;border-color:var(--border2) !important}
+.ML__keyboard .keycap,
+.ML__keyboard__keycap{
+  background:var(--s2) !important;color:var(--text) !important;
+  border-color:var(--border2) !important;
+}
+.ML__keyboard .keycap.shift,
+.ML__keyboard .keycap[data-shifted]{color:var(--accent2) !important}
+.ML__keyboard .keycap:hover,
+.ML__keyboard__keycap:hover{background:var(--s3) !important}
+.ML__keyboard .keycap.action,
+.ML__keyboard__keycap.action{background:var(--accent) !important;color:#fff !important}
+.ML__keyboard__toolbar{background:var(--s2) !important;border-bottom:1px solid var(--border2) !important;color:var(--text2) !important}
+.ML__keyboard__toolbar .item{color:var(--text2) !important;background:transparent !important}
+.ML__keyboard__toolbar .item.is-active,
+.ML__keyboard__toolbar .item.is-pressed{color:var(--accent2) !important;background:rgba(124,93,249,.15) !important}
+/* Variant panel (long-press alternatives) */
+.ML__variant-panel{background:var(--s1) !important;border:1px solid var(--border2) !important;color:var(--text) !important;box-shadow:0 10px 30px rgba(0,0,0,.5) !important}
+.ML__variant-panel .keycap{background:var(--s2) !important;color:var(--text) !important;border-color:var(--border2) !important}
+
+/* Mirror — hidden via display:none with !important. This is bulletproof:
+   no host stylesheet can re-show it, no specificity override can leak.
+   When MathLive is unavailable the math-field renders as an empty inline
+   shell (no functional UI) but never produces a duplicate visible input. */
+.mf-mirror{display:none !important}
+
+/* ─ Quick-actions row ─
+   Compact horizontal pill row directly below a math-field. Holds the
+   most-used calculator actions (sin, cos, √, x², fraction, π, ans, …).
+   Designed to be discoverable without becoming a giant symbol picker. */
+.mf-quick{
+  display:flex;flex-wrap:nowrap;gap:4px;
   overflow-x:auto;overflow-y:hidden;
   -webkit-overflow-scrolling:touch;scrollbar-width:none;
-  /* Subtle fade at the right edge as an overflow affordance. */
-  mask-image:linear-gradient(90deg,#000 0,#000 calc(100% - 24px),transparent 100%);
-  -webkit-mask-image:linear-gradient(90deg,#000 0,#000 calc(100% - 24px),transparent 100%);
+  padding:0;margin:0;
+  /* Soft fade at the right edge as an overflow affordance — same trick
+     used elsewhere; users on touch can drag-scroll to reveal more. */
+  mask-image:linear-gradient(90deg,#000 0,#000 calc(100% - 18px),transparent 100%);
+  -webkit-mask-image:linear-gradient(90deg,#000 0,#000 calc(100% - 18px),transparent 100%);
 }
-.mi-display-inner::-webkit-scrollbar{display:none}
-.mi-display-inner > *{flex-shrink:0}
-.mi-display .katex{font-size:1.05em;line-height:1.2;color:var(--text)}
-.mi-wrap[data-state="rendered"] .mi-display{opacity:1;pointer-events:auto}
-.mi-wrap[data-state="rendered"] .mi-display:hover{border-color:var(--border3)}
-/* Render → edit should be near-instant so the textarea + caret aren't
-   visually obscured during the fade; edit → render uses the slower
-   transition for a smooth "settle into math" feel. */
-.mi-wrap[data-state="editing"] .mi-display,
-.mi-wrap[data-state="empty"] .mi-display{transition:opacity .06s ease}
-/* When focused, the input's own focus border applies; we don't need to
-   double-style the wrap. */
-/* Compact variant used inside dense rows (e.g. graph fn-inputs). */
-.mi-wrap.mi-compact{flex:1 1 auto;min-width:0}
-.mi-wrap.mi-compact .mi-trigger{display:none}  /* uses shared launcher instead */
-.mi-wrap.mi-compact > input.mi-target,
-.mi-wrap.mi-compact > textarea.mi-target{padding-right:10px !important}
-.mi-wrap.mi-compact .mi-display{padding:7px 10px}
-.mi-wrap.mi-compact .mi-display .katex{font-size:13px}
-
-/* The popover itself — a singleton appended to body. */
-.math-popover{
-  position:fixed;z-index:200;opacity:0;pointer-events:none;
-  transform:translateY(6px) scale(.97);
-  transition:opacity .14s ease,transform .14s ease;
-  background:var(--s1);border:1px solid var(--border2);border-radius:14px;
-  box-shadow:0 18px 48px rgba(0,0,0,.45),0 4px 12px rgba(0,0,0,.25);
-  padding:10px;min-width:260px;max-width:min(440px, calc(100vw - 24px));
-  /* Cap height so it never pushes past the viewport on small phones. */
-  max-height:min(70vh, 520px);overflow-y:auto;
+.mf-quick::-webkit-scrollbar{display:none}
+.mf-quick > button{
+  flex-shrink:0;min-width:36px;height:30px;
+  padding:0 10px;
+  background:var(--s2);border:1px solid var(--border2);
+  border-radius:8px;
+  color:var(--text2);font-family:var(--mono);font-size:12.5px;
+  cursor:pointer;
+  transition:background .12s,border-color .12s,color .12s,transform .08s;
+  -webkit-tap-highlight-color:transparent;
+  display:inline-flex;align-items:center;justify-content:center;line-height:1;
 }
-.math-popover.open{opacity:1;pointer-events:auto;transform:translateY(0) scale(1)}
-.mp-section{margin-bottom:8px}
-.mp-section:last-child{margin-bottom:0}
-.mp-label{font-size:9px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:var(--text3);margin:2px 4px 6px;display:block}
-.mp-grid{display:grid;grid-template-columns:repeat(6,1fr);gap:6px}
-.mp-btn{
-  height:44px;padding:0 8px;display:flex;align-items:center;justify-content:center;
-  background:var(--s2);border:1px solid var(--border2);border-radius:10px;
-  color:var(--text);font-family:var(--mono);font-size:16px;cursor:pointer;
-  transition:all .12s;-webkit-tap-highlight-color:transparent;line-height:1;
-  position:relative;
+.mf-quick > button:hover{background:var(--s3);color:var(--text);border-color:var(--border3)}
+.mf-quick > button:active{transform:scale(.94);background:rgba(124,93,249,.18);border-color:rgba(124,93,249,.45);color:var(--accent2)}
+.mf-quick > button .sup{font-size:9px;vertical-align:super;margin-left:1px}
+.mf-quick > button .frac{display:inline-flex;flex-direction:column;line-height:.95;font-size:11px;margin:0 1px}
+.mf-quick > button .frac .num{border-bottom:1px solid currentColor;padding:0 3px 1px}
+.mf-quick > button .frac .den{padding:1px 3px 0}
+.mf-quick > button.mf-quick-ans{
+  background:rgba(245,158,11,.12);border-color:rgba(245,158,11,.32);
+  color:var(--gold2);
 }
-.mp-btn:hover{background:var(--s3);border-color:var(--border3)}
-.mp-btn:active{transform:scale(.94);background:rgba(124,93,249,.18);border-color:rgba(124,93,249,.45)}
-.mp-btn.wide{grid-column:span 2}
-.mp-btn .sup{font-size:10px;vertical-align:super;margin-left:1px}
-.mp-btn .sub{font-size:10px;vertical-align:sub;margin-left:1px}
-.mp-btn .frac{display:inline-flex;flex-direction:column;line-height:.95;font-size:11px;margin:0 1px}
-.mp-btn .frac .num{border-bottom:1px solid currentColor;padding:0 3px 1px}
-.mp-btn .frac .den{padding:1px 3px 0}
+.mf-quick > button.mf-quick-ans:hover{background:rgba(245,158,11,.22);border-color:rgba(245,158,11,.5)}
+.mf-quick > button.mf-quick-ans.disabled{opacity:.4;cursor:not-allowed;background:var(--s2);border-color:var(--border2);color:var(--text3)}
+/* On dense surfaces (graph fn-input rows) the quick row is suppressed
+   entirely — those inputs are already inside a multi-element row. */
+.mf-wrap.mf-compact-wrap .mf-quick{display:none}
 @media(max-width:520px){
-  .math-popover{min-width:0;width:min(360px, calc(100vw - 16px))}
-  .mp-grid{grid-template-columns:repeat(5,1fr)}
+  .mf-quick > button{min-width:38px;height:32px;font-size:13px}
 }
-/* Backdrop — gentle, only on mobile for tap-anywhere-to-close affordance. */
-.math-popover-backdrop{
-  position:fixed;inset:0;z-index:199;background:transparent;
-  opacity:0;pointer-events:none;transition:opacity .14s ease;
-}
-.math-popover-backdrop.open{opacity:1;pointer-events:auto}
 
 /* Mobile bottom navigation — visible only ≤700px. Sticky to the bottom with safe-area padding. */
 .mobile-nav{
@@ -1174,7 +1345,7 @@ header{
 /* Display */
 .display-card{
   background:var(--s1);border:1px solid var(--border);
-  border-radius:var(--r3);overflow:hidden;
+  border-radius:var(--r3);overflow:visible;
   display:flex;flex-direction:column;
   animation:fU .5s .1s ease both;
 }
@@ -1197,8 +1368,18 @@ header{
   font-family:var(--mono);font-size:26px;color:var(--text);
   caret-color:var(--accent2);resize:none;overflow:hidden;
   line-height:1.4;min-height:38px;
+  padding:0;
 }
 #expr::placeholder{color:var(--text3);opacity:.6;font-size:20px}
+/* Calc-specific: the rendered overlay matches the display-header's tinted
+   background (since #expr itself has no chrome of its own). The wrap +
+   display sit ON TOP of the existing display-header, so we use a soft
+   tint that reads as "rendered math" without looking like a separate
+   inset card. */
+#expr ~ .mi-display, .mi-wrap > #expr ~ .mi-display{
+  /* Selector left in place for documentation — actual styling is applied
+     by attachMathInput via the ancestor-bg lookup. */
+}
 
 .result-row{
   display:flex;align-items:baseline;justify-content:flex-end;
@@ -1491,7 +1672,7 @@ header{
   min-width:0;
 }
 .graph-section-label{font-size:10px;font-weight:700;color:var(--text3);text-transform:uppercase;letter-spacing:.07em}
-.fn-input-wrap{display:flex;gap:5px;align-items:center;margin-bottom:5px;min-width:0}
+.fn-input-wrap{display:flex;gap:5px;align-items:center;margin-bottom:5px;min-width:0;max-width:100%;overflow:hidden}
 .fn-color{width:14px;height:14px;border-radius:3px;flex-shrink:0;cursor:pointer;border:1px solid rgba(255,255,255,.15)}
 .fn-input{
   /* `min-width:0` lets the flex item shrink below its intrinsic content width.
@@ -1520,6 +1701,26 @@ header{
 }
 .fn-hidden-toggle.hidden{opacity:.4}
 .fn-hidden-toggle:hover{border-color:var(--border3);color:var(--text2)}
+/* Shared quick-insert toolbar above the function list. One slim row of common
+   operators that inserts into the most-recently-focused fn-input math-field. */
+.graph-quick{
+  display:flex;gap:4px;flex-wrap:wrap;margin-bottom:8px;
+  padding:6px;background:var(--s2);border:1px solid var(--border2);
+  border-radius:8px;
+}
+.graph-quick-btn{
+  min-width:32px;height:26px;padding:0 8px;
+  background:var(--s1);border:1px solid var(--border2);border-radius:6px;
+  color:var(--text2);cursor:pointer;font-family:var(--mono);font-size:12px;
+  display:inline-flex;align-items:center;justify-content:center;
+  transition:all .12s;
+}
+.graph-quick-btn:hover{background:var(--s3);color:var(--text);border-color:var(--border3)}
+.graph-quick-btn:active{transform:scale(.94);background:rgba(124,93,249,.18);border-color:rgba(124,93,249,.45);color:var(--accent2)}
+.graph-quick-btn .sup{font-size:9px;vertical-align:super;margin-left:1px}
+.graph-quick-btn .frac{display:inline-flex;flex-direction:column;line-height:.95;font-size:11px;margin:0 1px}
+.graph-quick-btn .frac .num{border-bottom:1px solid currentColor;padding:0 3px 1px}
+.graph-quick-btn .frac .den{padding:1px 3px 0}
 /* Compact "Insert symbol" launcher in the graph controls panel. */
 .g-btn-symbols{
   display:inline-flex;align-items:center;gap:6px;align-self:flex-start;
@@ -1530,6 +1731,9 @@ header{
 }
 .g-btn-symbols:hover{background:var(--s3);color:var(--accent2);border-color:rgba(124,93,249,.4)}
 .g-btn-symbols > span:first-child{font-family:var(--serif);font-style:italic;font-size:14px;color:var(--accent2)}
+/* Graph function list — vertical only, never horizontal. Prevents the
+   "white scrollbar to reveal delete buttons" UX failure. */
+#fn-list{display:flex;flex-direction:column;min-width:0;max-width:100%;overflow:hidden}
 .g-btn{
   padding:8px 12px;border-radius:9px;cursor:pointer;
   font-family:var(--sans);font-size:12px;font-weight:600;
@@ -1577,7 +1781,12 @@ header{
 .solver-input-card{
   background:var(--s1);border:1px solid var(--border);
   border-radius:var(--r3);padding:24px;margin-bottom:14px;
+  /* Defensive: nothing in this card should ever produce a scroll
+     container. The math-field handles its own internal overflow; the
+     examples row wraps; the buttons row wraps. */
+  overflow:visible;min-width:0;
 }
+.solver-input-card > math-field{margin-bottom:12px}
 .solver-label{font-size:12px;font-weight:600;color:var(--text3);letter-spacing:.07em;text-transform:uppercase;margin-bottom:8px}
 .solver-input{
   width:100%;background:var(--s2);border:1px solid var(--border2);
@@ -1588,7 +1797,7 @@ header{
 }
 .solver-input:focus{border-color:var(--accent)}
 .solver-input::placeholder{color:var(--text3);font-size:15px}
-.solver-types{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:14px}
+.solver-types{display:flex;gap:8px;flex-wrap:wrap;margin-top:14px;margin-bottom:14px}
 .stype{
   font-size:11px;font-weight:600;padding:5px 13px;border-radius:8px;
   cursor:pointer;border:1px solid var(--border2);color:var(--text3);
@@ -1619,6 +1828,7 @@ header{
 /* ── CONVERTER PAGE ── */
 .conv-wrap{max-width:680px;margin:20px auto 0;animation:fU .4s ease both}
 .conv-grid{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-top:14px}
+.conv-grid > .conv-card:nth-child(odd):last-child{grid-column:1 / -1}
 .conv-card{
   background:var(--s1);border:1px solid var(--border);
   border-radius:var(--r3);padding:20px;
@@ -1633,6 +1843,9 @@ header{
   font-size:15px;padding:9px 13px;outline:none;transition:border-color .2s;
 }
 .conv-inp:focus{border-color:var(--accent)}
+.conv-inp::-webkit-outer-spin-button,
+.conv-inp::-webkit-inner-spin-button{-webkit-appearance:none;margin:0}
+.conv-inp[type="number"]{-moz-appearance:textfield;appearance:textfield}
 .conv-sel{
   width:100%;background:var(--s2);border:1px solid var(--border2);
   border-radius:8px;color:var(--text);font-family:var(--sans);
@@ -2473,14 +2686,21 @@ header{
           <div class="graph-section-label" data-i18n="graph.fns.title">Functions</div>
           <!-- Slot for the graph math toolbar; populated by attachMathBar at boot.
                Acts on whichever fn-input is currently focused (last-focused). -->
-          <!-- Graph math-symbol launcher: opens the popover targeting whichever
-               fn-input was focused last. Placed compactly to the right so it
-               doesn't compete with the +Add Function button below. -->
-          <button type="button" id="graph-math-launcher" class="g-btn g-btn-symbols"
-            onclick="openGraphMathPopover(event.currentTarget)">
-            <span aria-hidden="true">ƒ</span>
-            <span data-i18n="graph.btn.symbols">Insert symbol</span>
-          </button>
+          <!-- Each <math-field> in the function list has its own structural
+               math editor; this slim shared toolbar acts on whichever fn-input
+               is currently focused (or the first one as a fallback). Mobile
+               users without a physical keyboard get easy access to common
+               operators without each row carrying its own quick-row. -->
+          <div id="graph-quick" class="graph-quick" role="toolbar" aria-label="Quick math insert">
+            <button type="button" class="graph-quick-btn" onclick="graphInsert('\\sin(#?)')" title="sine">sin</button>
+            <button type="button" class="graph-quick-btn" onclick="graphInsert('\\cos(#?)')" title="cosine">cos</button>
+            <button type="button" class="graph-quick-btn" onclick="graphInsert('\\tan(#?)')" title="tangent">tan</button>
+            <button type="button" class="graph-quick-btn" onclick="graphInsert('\\sqrt{#?}')" title="square root">√</button>
+            <button type="button" class="graph-quick-btn" onclick="graphInsert('^{2}')" title="square">x<span class="sup">2</span></button>
+            <button type="button" class="graph-quick-btn" onclick="graphInsert('^{#?}')" title="exponent">x<span class="sup">n</span></button>
+            <button type="button" class="graph-quick-btn" onclick="graphInsert('\\frac{#?}{#?}')" title="fraction"><span class="frac"><span class="num">a</span><span class="den">b</span></span></button>
+            <button type="button" class="graph-quick-btn" onclick="graphInsert('\\pi ')" title="pi">π</button>
+          </div>
           <div id="fn-list"></div>
           <button class="g-btn g-btn-add" onclick="addFn()" data-i18n="graph.btn.addFn">+ Add function</button>
 
@@ -6869,8 +7089,9 @@ function renderCalcSuggestions() {
 function loadSuggestion(expr) {
   if (!exprEl) return;
   exprEl.value = expr;
+  try { syncMathField(exprEl); } catch(_) {}
   exprEl.dispatchEvent(new Event('input'));
-  exprEl.focus();
+  try { (exprEl._mfElement || exprEl).focus(); } catch(_) {}
   renderCalcSuggestions();
 }
 
@@ -7816,9 +8037,11 @@ function textToTex(s) {
   // 7. Fractions.
   out = _fractionize(out);
 
-  // 8. Multiplication: keep numeric-juxtaposition with a thin dot.
-  out = out.replace(/(?<![\\A-Za-z0-9])\*(?![\\A-Za-z0-9])/g, ' \\cdot ');
-  out = out.replace(/\*/g, ' \\cdot ');
+  // 8. Multiplication: render as × (cross), not · (dot). Visual contract is
+  //    the × symbol; internal evaluation is always the ASCII `*` (latexToText
+  //    converts \times back to *).
+  out = out.replace(/(?<![\\A-Za-z0-9])\*(?![\\A-Za-z0-9])/g, ' \\times ');
+  out = out.replace(/\*/g, ' \\times ');
 
   return out;
 }
@@ -7862,425 +8085,553 @@ function renderMathTo(el, text, opts) {
 }
 
 /* ═══════════════════════════════════════════════
-   MATH INPUT SYSTEM (popover + live preview)
-   Replaces the old inline-strip toolbar that compressed every input. Two
-   parts cooperate:
-     attachMathInput(target, preset) — wraps the target so it gets a small
-       ƒ trigger button INSIDE its right edge and an optional rendered
-       preview BELOW it. No layout width is consumed permanently.
-     The math popover — singleton floating panel with categorized math
-       symbols and structural templates. Symbols insert at the input's
-       caret without stealing focus. Dismissed on outside-click/Esc.
+   MATH INPUT SYSTEM (MathLive structural editor)
+   Every math-primary input in the app is rendered by a <math-field>
+   element from MathLive — a real structural math editor where users
+   type and the math reflows live: fractions stack, exponents rise,
+   radicals draw. There is no overlay/preview/render-toggle anymore.
+   The original <textarea>/<input> elements remain in the DOM as hidden
+   "mirrors" that hold the math.js-compatible plain text. The rest of
+   the app (parser, sync, AI prompts, history, achievements) keeps
+   reading the mirror's `.value` exactly as before — the MathLive editor
+   just sits on top as the visible UI.
 ═══════════════════════════════════════════════ */
 
-// Symbol palette. Each entry: { l: label, v: inserted-on-tap, close?: closer,
-// html?: rich HTML for the button face }. `wide:1` makes a button span 2 cols.
-// The "tmpl" key distinguishes structural insertions (fraction, sqrt, etc.)
-// where we want the caret placed inside the first slot after insertion.
-// Structural inserts use a placeholder (`■`) inside the empty slot that
-// gets PRE-SELECTED on insertion. The user's next keystroke replaces the
-// placeholder, then they can press Tab or right-arrow to jump out and
-// continue typing — classic calculator template workflow.
-const _PH = '■'; // U+25A0; visually obvious, single-char so selection is clean
-const MATH_PALETTE = {
-  // Solver / Calculator-style — comprehensive
-  solver: [
-    { label:'core', items:[
-      { l:'x', v:'x' }, { l:'y', v:'y' },
-      { l:'π', v:'π' }, { l:'e', v:'e' }, { l:'θ', v:'θ' }, { l:'∞', v:'∞' },
-    ]},
-    { label:'structure', items:[
-      // Templates: the placeholder character is inserted, then pre-selected
-      // so the user can type the body immediately.
-      { html:'<span class="frac"><span class="num">a</span><span class="den">b</span></span>',
-        v:'('+_PH+')/('+_PH+')', caret:1, select:1, label:'fraction' },
-      { html:'x<span class="sup">2</span>',     v:'^2',           label:'square' },
-      { html:'x<span class="sup">n</span>',     v:'^('+_PH+')',   caret:2, select:1, label:'exponent' },
-      { html:'x<span class="sub">n</span>',     v:'_('+_PH+')',   caret:2, select:1, label:'subscript' },
-      { l:'√',  v:'sqrt('+_PH+')',  caret:5, select:1, label:'root' },
-      { l:'∛',  v:'cbrt('+_PH+')',  caret:5, select:1, label:'cube root' },
-      { l:'|x|',v:'abs('+_PH+')',   caret:4, select:1, label:'abs' },
-      { l:'(',  v:'(' }, { l:')', v:')' },
-      { l:'[',  v:'[' }, { l:']', v:']' },
-    ]},
-    { label:'operators', items:[
-      { l:'+', v:'+' }, { l:'−', v:'-' }, { l:'×', v:'×' }, { l:'÷', v:'÷' },
-      { l:'=', v:'=' }, { l:'≤', v:'≤' }, { l:'≥', v:'≥' }, { l:'≠', v:'≠' },
-      { l:'±', v:'±' }, { l:',', v:',' },
-    ]},
-    { label:'functions', items:[
-      { l:'sin', v:'sin('+_PH+')', caret:4, select:1, wide:1 },
-      { l:'cos', v:'cos('+_PH+')', caret:4, select:1, wide:1 },
-      { l:'tan', v:'tan('+_PH+')', caret:4, select:1, wide:1 },
-      { l:'log', v:'log('+_PH+')', caret:4, select:1, wide:1 },
-      { l:'ln',  v:'ln('+_PH+')',  caret:3, select:1, wide:1 },
-      { l:'exp', v:'exp('+_PH+')', caret:4, select:1, wide:1 },
-    ]},
+// LaTeX → math.js text. Inverse of textToTex (which is plain-text → LaTeX).
+// MathLive serializes user input as LaTeX; we need parser-ready text for
+// math.js and downstream code. Conservative — anything we don't recognize
+// passes through as-is, so the parser produces the same errors it always did.
+function latexToText(latex) {
+  if (!latex) return '';
+  let s = String(latex);
+  // Repeatedly resolve \frac{a}{b}, \sqrt{x}, \sqrt[n]{x}, \abs{x}. Each pass
+  // strips the innermost braced groups, so nesting like \frac{\frac{1}{2}}{x}
+  // resolves correctly within a few iterations.
+  for (let pass = 0; pass < 12; pass++) {
+    const before = s;
+    s = s
+      // \frac and its display-style variants. MathLive's smart-mode sometimes
+      // produces \dfrac for "displaystyle" fractions in larger expressions.
+      // Without these variants, the fraction wouldn't be normalized and the
+      // catchall would leave `dfrac33` in the mirror value — math.js can't
+      // parse that, so practice answers like `3/3` would fail validation.
+      .replace(/\\[dtc]?frac\s*\{([^{}]*)\}\s*\{([^{}]*)\}/g, '($1)/($2)')
+      .replace(/\\sqrt\s*\[\s*([^\[\]]*)\s*\]\s*\{([^{}]*)\}/g, 'nthRoot($2,$1)')
+      .replace(/\\sqrt\s*\{([^{}]*)\}/g, 'sqrt($1)')
+      .replace(/\\left\s*\|\s*([^|]*?)\s*\\right\s*\|/g, 'abs($1)')
+      .replace(/\\abs\s*\{([^{}]*)\}/g, 'abs($1)')
+      // MathLive sometimes wraps operator names (esp. `ans`) inside an extra
+      // \mathrm{...} (or \mathit / \mathbf) layer: `\operatorname{\mathrm{ans}}`.
+      // Strip these typography wrappers FIRST so the \operatorname pass below
+      // sees a plain `\operatorname{ans}` and resolves it to bare `ans`.
+      // Without this, the catchall `\\([a-zA-Z]+)` would leave behind a
+      // mangled string like `operatornamemathrmans` which math.js can't parse.
+      .replace(/\\(?:mathrm|mathit|mathbf|mathsf|mathtt|mathup|boldsymbol|symbf|symit|symbb)\s*\{([^{}]*)\}/g, '$1')
+      // Text-mode wrappers. Smart-mode in MathLive can push a single variable
+      // into a \text{...} region when adjacent to a digit (`43x` was being
+      // serialized as `43\text{x}`). The catchall would then strip the
+      // backslash and leave `43textx` (or `43xtext`) in the mirror value,
+      // which the implicit-multiplication sanitizer turned into the visible
+      // garbage `43 × xtext`. Unwrapping here keeps the variable as bare `x`.
+      .replace(/\\(?:text|textrm|textbf|textit|textsl|textsc|textsf|texttt|emph|operatorname\*?)\s*\{([^{}]*)\}/g, '$1');
+    if (s === before) break;
+  }
+  s = s
+    // Multi-char braced exponent / subscript → parenthesized form
+    .replace(/\^\s*\{\s*([^{}])\s*\}/g, '^$1')
+    .replace(/\^\s*\{([^{}]*)\}/g, '^($1)')
+    .replace(/_\s*\{\s*([^{}])\s*\}/g, '_$1')
+    .replace(/_\s*\{([^{}]*)\}/g, '_($1)')
+    // \operatorname{name} → name (used for any function math.js knows by name)
+    .replace(/\\operatorname\s*\{\s*([a-zA-Z_][a-zA-Z0-9_]*)\s*\}/g, '$1')
+    // \binom{a}{b} → combinations(a,b)
+    .replace(/\\binom\s*\{([^{}]*)\}\s*\{([^{}]*)\}/g, 'combinations($1,$2)')
+    // \arcsin, \arccos, \arctan → asin, acos, atan (math.js naming)
+    .replace(/\\arcsin\b/g, 'asin')
+    .replace(/\\arccos\b/g, 'acos')
+    .replace(/\\arctan\b/g, 'atan')
+    // \lim_{x\to a} body → limit(body, x, a) — math.js doesn't have a limit
+    // function so we leave it as a recognisable token; the AI/solver paths
+    // can interpret. For non-evaluable forms we just strip the LaTeX.
+    .replace(/\\lim_\{([^{}]*)\\to\s*([^{}]*)\}\s*/g, 'limit_$1to$2 ')
+    .replace(/\\lim\b/g, 'limit')
+    .replace(/\\int\b/g, 'integrate')
+    .replace(/\\sum\b/g, 'sum')
+    .replace(/\\prod\b/g, 'product')
+    .replace(/\\partial\b/g, 'partial')
+    .replace(/\\nabla\b/g, 'gradient')
+    .replace(/\\oint\b/g, 'contour')
+    .replace(/\\iiint\b/g, 'tripleInt')
+    .replace(/\\bmod\b/g, 'mod')
+    .replace(/\\varphi\b/g, '1.6180339887')
+    .replace(/\\tau\b/g, '6.2831853')
+    .replace(/\\lfloor\s*/g, 'floor(').replace(/\s*\\rfloor/g, ')')
+    .replace(/\\lceil\s*/g, 'ceil(').replace(/\s*\\rceil/g, ')')
+    .replace(/\\,/g, '')   // thin-space spacing macro — drop in math context
+    // Functions: strip leading backslash
+    .replace(/\\(?:sin|cos|tan|asin|acos|atan|sinh|cosh|tanh|cot|log|ln|exp|max|min|gcd|lcm|mod)\b/g, m => m.slice(1))
+    // Greek letters → name form (math.js treats them as identifiers / our textToTex handles them)
+    .replace(/\\pi\b/g, 'pi').replace(/\\theta\b/g, 'theta')
+    .replace(/\\(alpha|beta|gamma|delta|epsilon|zeta|eta|iota|kappa|lambda|mu|nu|xi|rho|sigma|tau|phi|chi|psi|omega)\b/g, '$1')
+    .replace(/\\(Gamma|Delta|Theta|Lambda|Xi|Pi|Sigma|Phi|Psi|Omega)\b/g, '$1')
+    // Degrees: silently drop the symbol. Auto-converting `234°` to
+    // `234*(pi/180)` produced surprising standalone results (234° → 4.084
+    // in radians) and was poor UX. Real calculators preserve degree
+    // notation visually and treat the trig-degree-vs-radian distinction
+    // via an explicit mode toggle. Dropping the glyph here keeps the
+    // mirror value parseable while leaving the math-field's visible `°`
+    // untouched. Trig conversion (when needed) can be opt-in later.
+    .replace(/\^\s*\{\s*\\circ\s*\}/g, '')
+    .replace(/\^\s*\\circ\b/g, '')
+    .replace(/\\degree\b/g, '')
+    .replace(/\\circ\b/g, '')
+    .replace(/°/g, '')
+    // Operators — LITERAL replacement, no follower-character constraint.
+    // MathLive sometimes serializes `5 × ans` as `5\times\operatorname{...}`
+    // with NO space between `\times` and the following backslash, and in
+    // some cases concatenates as `\timesans` (no separator at all). The
+    // previous `(?![a-zA-Z])` lookahead failed in that second case — the
+    // catchall `\\([a-zA-Z]+)` would then greedily match `\timesans` as a
+    // single token and strip just the backslash, producing the visible
+    // garbage `timesans`. Replacing the literal command (followed by any
+    // whitespace) avoids both failure modes. `\timeshare` is the only
+    // theoretical false-positive — not a real construct MathLive emits.
+    .replace(/\\cdot\s*/g, '*')
+    .replace(/\\times\s*/g, '*')
+    .replace(/\\div\s*/g, '/')
+    .replace(/\\le\b/g, '<=').replace(/\\ge\b/g, '>=').replace(/\\ne\b/g, '!=')
+    .replace(/\\pm\b/g, '±').replace(/\\mp\b/g, '∓')
+    .replace(/\\infty\b/g, 'Infinity')
+    // \left( and \right) — strip the size hints (parens already work fine)
+    .replace(/\\left\s*([(\[{])/g, '$1')
+    .replace(/\\right\s*([)\]}])/g, '$1')
+    // Spacing macros
+    .replace(/\\[, !;:]/g, '')
+    .replace(/\\quad\b\s*/g, ' ').replace(/\\qquad\b\s*/g, '  ')
+    // Drop curly braces that remain after structure extraction
+    .replace(/[{}]/g, '')
+    // Drop any remaining \word that we didn't translate — best-effort
+    .replace(/\\([a-zA-Z]+)(?![a-zA-Z])/g, '$1');
+  // Collapse internal whitespace; trim
+  return s.replace(/\s+/g, ' ').trim();
+}
+
+const _MF_READY = (typeof customElements !== 'undefined' && customElements.whenDefined)
+  ? customElements.whenDefined('math-field').catch(() => null)
+  : Promise.resolve();
+
+// Global silence at the static-class level. MathLive 0.99 has a per-instance
+// sound config that we still set in setupMathField for safety, but the static
+// `MathfieldElement.soundsDirectory = null` covers any code path that creates
+// a math-field before our setup callback runs (which is what produces the
+// "plonk on empty-input backspace" UX bug). Set both styles to be robust
+// across MathLive's API drift.
+_MF_READY.then(() => {
+  try {
+    if (typeof MathfieldElement !== 'undefined') {
+      try { MathfieldElement.soundsDirectory = null; } catch(_) {}
+      try { MathfieldElement.plonkSound = null; } catch(_) {}
+      try { MathfieldElement.keypressSound = null; } catch(_) {}
+      try { MathfieldElement.spacebarKeypressSound = null; } catch(_) {}
+      try { MathfieldElement.returnKeypressSound = null; } catch(_) {}
+      try { MathfieldElement.deleteKeypressSound = null; } catch(_) {}
+    }
+  } catch(_) {}
+});
+
+// ─── Quick-action presets ───
+// Compact, tasteful sets of buttons displayed under the editor. Each entry:
+//   label  — what the button shows (may be HTML)
+//   insert — LaTeX inserted into the math-field via `executeCommand('insert')`
+//   title  — tooltip
+//   cls    — optional extra class (e.g. mf-quick-ans for the ans button)
+const _MF_QUICK = {
+  // Full calculator-style set — calc + solver.
+  standard: [
+    { label:'sin',  insert:'\\sin(#?)',  title:'sine' },
+    { label:'cos',  insert:'\\cos(#?)',  title:'cosine' },
+    { label:'tan',  insert:'\\tan(#?)',  title:'tangent' },
+    { label:'log',  insert:'\\log(#?)',  title:'log base 10' },
+    { label:'ln',   insert:'\\ln(#?)',   title:'natural log' },
+    { label:'√',    insert:'\\sqrt{#?}', title:'square root' },
+    { label:'x<span class="sup">2</span>', insert:'^2',         title:'square' },
+    { label:'x<span class="sup">n</span>', insert:'^{#?}',      title:'exponent' },
+    { label:'<span class="frac"><span class="num">a</span><span class="den">b</span></span>',
+      insert:'\\frac{#?}{#?}', title:'fraction' },
+    { label:'π',    insert:'\\pi ',      title:'pi' },
+    { label:'ans',  insert:'\\operatorname{ans}', title:'last answer', cls:'mf-quick-ans' },
   ],
-  // Practice — keep small; answers don't need integrals/sums
+  // Practice — leaner; no ans (answers are independent per question).
   practice: [
-    { label:'common', items:[
-      { html:'<span class="frac"><span class="num">a</span><span class="den">b</span></span>',
-        v:'('+_PH+')/('+_PH+')', caret:1, select:1, label:'fraction' },
-      { html:'x<span class="sup">2</span>',  v:'^2' },
-      { html:'x<span class="sup">n</span>',  v:'^('+_PH+')', caret:2, select:1 },
-      { l:'√',  v:'sqrt('+_PH+')', caret:5, select:1 },
-      { l:'π',  v:'π' }, { l:'e', v:'e' },
-      { l:'(',  v:'(' }, { l:')', v:')' },
-      { l:'|x|',v:'abs('+_PH+')',  caret:4, select:1 },
-      { l:'±',  v:'±' }, { l:'≤', v:'≤' }, { l:'≥', v:'≥' },
-    ]},
-  ],
-  // Graphing — variable + function leaning
-  graph: [
-    { label:'core', items:[
-      { l:'x', v:'x' }, { l:'π', v:'π' }, { l:'e', v:'e' },
-      { html:'x<span class="sup">2</span>',  v:'^2' },
-      { html:'x<span class="sup">n</span>',  v:'^('+_PH+')', caret:2, select:1 },
-      { l:'√',  v:'sqrt('+_PH+')', caret:5, select:1 },
-      { html:'<span class="frac"><span class="num">a</span><span class="den">b</span></span>',
-        v:'('+_PH+')/('+_PH+')', caret:1, select:1, label:'fraction' },
-      { l:'(', v:'(' }, { l:')', v:')' },
-      { l:'|x|',v:'abs('+_PH+')',  caret:4, select:1 },
-    ]},
-    { label:'functions', items:[
-      { l:'sin', v:'sin('+_PH+')', caret:4, select:1 },
-      { l:'cos', v:'cos('+_PH+')', caret:4, select:1 },
-      { l:'tan', v:'tan('+_PH+')', caret:4, select:1 },
-      { l:'exp', v:'exp('+_PH+')', caret:4, select:1 },
-      { l:'ln',  v:'ln('+_PH+')',  caret:3, select:1 },
-      { l:'abs', v:'abs('+_PH+')', caret:4, select:1 },
-    ]},
-  ],
-  // AI chat — natural-language with light math punctuation
-  ai: [
-    { label:'symbols', items:[
-      { html:'<span class="frac"><span class="num">a</span><span class="den">b</span></span>',
-        v:'('+_PH+')/('+_PH+')', caret:1, select:1, label:'fraction' },
-      { html:'x<span class="sup">2</span>',  v:'^2' },
-      { html:'x<span class="sup">n</span>',  v:'^('+_PH+')', caret:2, select:1 },
-      { l:'√', v:'sqrt('+_PH+')', caret:5, select:1 },
-      { l:'π', v:'π' }, { l:'θ', v:'θ' },
-      { l:'∫', v:'∫' }, { l:'∑', v:'∑' }, { l:'∂', v:'∂' },
-      { l:'≤', v:'≤' }, { l:'≥', v:'≥' }, { l:'≠', v:'≠' },
-    ]},
+    { label:'<span class="frac"><span class="num">a</span><span class="den">b</span></span>',
+      insert:'\\frac{#?}{#?}', title:'fraction' },
+    { label:'x<span class="sup">2</span>', insert:'^2',         title:'square' },
+    { label:'x<span class="sup">n</span>', insert:'^{#?}',      title:'exponent' },
+    { label:'√',    insert:'\\sqrt{#?}', title:'square root' },
+    { label:'π',    insert:'\\pi ',      title:'pi' },
+    { label:'|x|',  insert:'\\left|#?\\right|', title:'absolute value' },
+    { label:'±',    insert:'\\pm ',      title:'plus-or-minus' },
+    { label:'≤',    insert:'\\le ',      title:'less or equal' },
+    { label:'≥',    insert:'\\ge ',      title:'greater or equal' },
   ],
 };
 
-// Singleton popover lifecycle — kept private behind these helpers.
-const _mathPop = (() => {
-  let el = null, backdrop = null, currentTarget = null, currentTrigger = null;
-  function ensure() {
-    if (el) return;
-    el = document.createElement('div');
-    el.className = 'math-popover';
-    el.setAttribute('role', 'dialog');
-    el.setAttribute('aria-label', 'Math symbols');
-    document.body.appendChild(el);
-    backdrop = document.createElement('div');
-    backdrop.className = 'math-popover-backdrop';
-    document.body.appendChild(backdrop);
-    backdrop.addEventListener('click', close);
-    document.addEventListener('keydown', e => { if (e.key === 'Escape') close(); });
-    // NOTE: we intentionally DO NOT pointerdown.preventDefault() on the
-    // whole popover element — that would block touch-scrolling of the
-    // grid on small screens. Each .mp-btn handles its own focus-shift
-    // prevention via the global delegated handler (see _caretInsert).
-  }
-  function _btnFor(it, target) {
-    const b = document.createElement('button');
-    b.type = 'button';
-    b.className = 'mp-btn' + (it.wide ? ' wide' : '');
-    b.tabIndex = -1;
-    if (it.html) b.innerHTML = it.html; else b.textContent = it.l;
-    b.title = it.label || it.l || '';
-    b.addEventListener('click', () => {
-      _insertAt(target, it.v, it.close, it.caret, it.select);
-      // Keep popover open so users can compose multiple symbols quickly.
-    });
-    return b;
-  }
-  function _insertAt(target, open, close, caretOffset, selectLength) {
-    if (!target) return;
-    const el = target;
-    const hadFocus = (document.activeElement === el);
-    const s = (el.selectionStart != null) ? el.selectionStart : el.value.length;
-    const e = (el.selectionEnd   != null) ? el.selectionEnd   : el.value.length;
-    const before = el.value.slice(0, s);
-    const sel    = el.value.slice(s, e);
-    const after  = el.value.slice(e);
-    let inserted, cursorAfter, cursorEnd;
-    if (close) {
-      const m = sel || '';
-      inserted = open + m + close;
-      cursorAfter = s + open.length + m.length;
-      cursorEnd = cursorAfter;
-    } else {
-      inserted = open;
-      // Structural inserts: `caretOffset` puts the caret inside the first
-      // empty slot. `selectLength` (optional) selects a placeholder so the
-      // user's next keystroke replaces it (calculator-like behavior).
-      if (typeof caretOffset === 'number') {
-        cursorAfter = s + caretOffset;
-        cursorEnd = cursorAfter + (selectLength || 0);
-      } else {
-        cursorAfter = s + open.length;
-        cursorEnd = cursorAfter;
-      }
+// Last calculator result for the `ans` token. Updated whenever the live
+// calculator (or any equivalent surface) successfully evaluates. Exposed
+// via `getLastAns()` so multiple consumers can use it.
+let _mathLastAns = null;
+function setLastAns(v) {
+  if (v == null) return;
+  // Only accept finite numeric results — `ans` should never carry NaN/text.
+  if (typeof v === 'number' && isFinite(v)) {
+    _mathLastAns = v;
+    _refreshAnsButtons();
+  } else if (typeof v === 'string') {
+    const parsed = Number(v);
+    if (isFinite(parsed)) {
+      _mathLastAns = parsed;
+      _refreshAnsButtons();
     }
-    el.value = before + inserted + after;
-    try { el.setSelectionRange(cursorAfter, cursorEnd); } catch(_) {}
-    // Always focus the input after a popover symbol-insert. Without this,
-    // tapping a symbol after the input has blurred (rendered state) would
-    // leave the user with the input still blurred — they'd have to tap
-    // again to start typing the exponent body.
-    try { el.focus({ preventScroll: true }); } catch(_) {}
-    try { el.dispatchEvent(new Event('input', { bubbles: true })); } catch(_) {}
   }
-  function open(target, trigger, presetKey) {
-    ensure();
-    // Always ensure the target is in editing state when the popover opens —
-    // otherwise the user inserts symbols into a textarea they can't see,
-    // because the rendered overlay is covering it.
-    if (target && target._miWrap && target._miWrap.dataset.state === 'rendered') {
-      try {
-        target.focus({ preventScroll: true });
-        const end = target.value.length;
-        try { target.setSelectionRange(end, end); } catch(_) {}
-      } catch(_) {}
-    }
-    const preset = MATH_PALETTE[presetKey] || MATH_PALETTE.solver;
-    // Build content fresh — palette is cheap and target may have changed.
-    el.innerHTML = '';
-    for (const sec of preset) {
-      const wrap = document.createElement('div');
-      wrap.className = 'mp-section';
-      if (sec.label) {
-        const lbl = document.createElement('span');
-        lbl.className = 'mp-label';
-        lbl.textContent = t('math.section.' + sec.label) || sec.label;
-        // Fall back to raw section id if the i18n key is missing.
-        if (!lbl.textContent || lbl.textContent === 'math.section.' + sec.label) lbl.textContent = sec.label;
-        wrap.appendChild(lbl);
-      }
-      const grid = document.createElement('div');
-      grid.className = 'mp-grid';
-      for (const it of sec.items) grid.appendChild(_btnFor(it, target));
-      wrap.appendChild(grid);
-      el.appendChild(wrap);
-    }
-    currentTarget = target;
-    currentTrigger = trigger;
-    // Position: anchor below the trigger; clamp inside the viewport.
-    requestAnimationFrame(() => {
-      const r = trigger.getBoundingClientRect();
-      const w = el.offsetWidth, h = el.offsetHeight;
-      const vw = window.innerWidth, vh = window.innerHeight;
-      let left = Math.min(Math.max(8, r.right - w), vw - w - 8);
-      let top = r.bottom + 8;
-      if (top + h > vh - 8) top = Math.max(8, r.top - h - 8);
-      el.style.left = left + 'px';
-      el.style.top  = top  + 'px';
-      el.classList.add('open');
-      backdrop.classList.add('open');
-      if (currentTrigger) currentTrigger.classList.add('open');
-    });
-  }
-  function close() {
-    if (!el) return;
-    el.classList.remove('open');
-    backdrop.classList.remove('open');
-    if (currentTrigger) currentTrigger.classList.remove('open');
-    currentTarget = null;
-    currentTrigger = null;
-  }
-  function isOpenFor(target) { return el && el.classList.contains('open') && currentTarget === target; }
-  return { open, close, isOpenFor };
-})();
+}
+function getLastAns() { return _mathLastAns; }
+function _refreshAnsButtons() {
+  document.querySelectorAll('.mf-quick-ans').forEach(b => {
+    if (_mathLastAns == null) b.classList.add('disabled');
+    else b.classList.remove('disabled');
+  });
+}
 
-// Outside click closes the popover (in addition to backdrop tap).
-document.addEventListener('pointerdown', (e) => {
-  const pop = document.querySelector('.math-popover.open');
-  if (!pop) return;
-  if (pop.contains(e.target)) return;
-  if (e.target.closest && e.target.closest('.mi-trigger')) return;
-  _mathPop.close();
-}, true);
-
-/* Attach the math-input system to a target input/textarea.
-   Options:
-     preset      — math popover preset key ('solver','practice','graph','ai',…)
-     overlay     — if true (default for math), the rendered math IS the
-                   visible state when blurred. Set false for AI chat etc.
-                   where natural-language text should always be visible.
-     compact     — small-row variant (graph fn-inputs); no per-input trigger,
-                   uses a shared launcher elsewhere on the page.
-     showTrigger — explicit override; defaults to !compact.
-*/
-function attachMathInput(target, presetKey, opts) {
-  if (!target || target._miAttached) return null;
-  opts = opts || {};
-  target._miAttached = true;
-  target.classList.add('mi-target');
-  const useOverlay   = opts.overlay !== false;
-  const compact      = !!opts.compact;
-  const showTrigger  = (opts.showTrigger !== undefined) ? !!opts.showTrigger : !compact;
-
-  // Harden text inputs against mobile auto-helpers that are actively
-  // hostile to math typing. iOS Safari otherwise tries to autocorrect
-  // "sin" to "sing", capitalize "x" mid-expression, and underline every
-  // identifier as a typo. Applied to AI chat too — math snippets are
-  // common enough there.
+// Insert a quick-action's payload at the math-field's caret.
+function mfQuickInsert(mf, button) {
+  if (!mf || !button) return;
+  const latex = button.dataset.mfInsert;
+  if (!latex) return;
   try {
-    target.setAttribute('autocomplete', 'off');
-    target.setAttribute('autocorrect', 'off');
-    target.setAttribute('autocapitalize', 'off');
-    target.setAttribute('spellcheck', 'false');
+    // Always re-focus first so the insertion lands at the caret rather than
+    // appending to the end (when the field has lost focus to the button).
+    mf.focus();
+    if (mf.executeCommand) mf.executeCommand(['insert', latex, { focus: true, feedback: false, scrollIntoView: true, mode: 'math' }]);
+    else mf.value = (mf.value || '') + latex;  // fallback (shouldn't run)
   } catch(_) {}
+}
 
-  const parent = target.parentNode;
+/* Set up a MathLive math-field that mirrors `originalInput`'s value as
+   math.js text. The original input is hidden but stays in the DOM so all
+   existing `.value` / event consumers keep working unmodified.
+     - opts.compact   : graph-row sizing
+     - opts.multiline : taller (calc/solver)
+     - opts.placeholder : LaTeX-ish placeholder string */
+function setupMathField(originalInput, opts) {
+  if (!originalInput || originalInput._mfMounted) return null;
+  opts = opts || {};
+  originalInput._mfMounted = true;
+
+  const parent = originalInput.parentNode;
   if (!parent) return null;
 
-  // Wrap the input in a positioned container.
+  // Wrap so the math-field + quick-actions row layout cleanly inside the
+  // host (esp. flex rows like the practice answer row, where the field
+  // must take the available width and the quick row goes below).
   const wrap = document.createElement('div');
-  wrap.className = 'mi-wrap' + (compact ? ' mi-compact' : '');
-  wrap.dataset.state = target.value.trim() ? 'rendered' : 'empty';
-  parent.insertBefore(wrap, target);
-  wrap.appendChild(target);
+  wrap.className = 'mf-wrap' + (opts.compact ? ' mf-compact-wrap' : '');
+  parent.insertBefore(wrap, originalInput);
 
-  // Trigger button (ƒ) — opens the symbol popover. Skipped in compact mode.
-  let trigger = null;
-  if (showTrigger) {
-    trigger = document.createElement('button');
-    trigger.type = 'button';
-    trigger.className = 'mi-trigger';
-    trigger.tabIndex = -1;
-    trigger.innerHTML = '<span aria-hidden="true">ƒ</span>';
-    trigger.setAttribute('aria-label', 'Insert math symbols');
-    trigger.addEventListener('pointerdown', e => e.preventDefault());
-    trigger.addEventListener('click', () => {
-      // Tapping the trigger while a rendered overlay is showing should
-      // switch to edit mode first so the user can see what they're inserting.
-      if (useOverlay && wrap.dataset.state === 'rendered') _enterEdit();
-      if (_mathPop.isOpenFor(target)) _mathPop.close();
-      else _mathPop.open(target, trigger, presetKey);
-    });
-    wrap.appendChild(trigger);
+  // Build the math-field shell ASAP. Its content is filled when MathLive
+  // finishes registering the custom element.
+  const mf = document.createElement('math-field');
+  mf.className = 'mf-field' +
+    (opts.compact   ? ' mf-compact'   : '') +
+    (opts.multiline ? ' mf-multiline' : '');
+  mf.setAttribute('default-mode', 'math');
+  mf.setAttribute('letter-shape-style', 'tex');
+  if (opts.placeholder) mf.setAttribute('placeholder', opts.placeholder);
+  wrap.appendChild(mf);
+
+  // Quick-actions row: a tasteful, compact strip with the most-used
+  // calculator actions. Skipped in compact mode (graph fn-inputs are
+  // already inside a dense row layout). Each button uses
+  // MathLive's `insert` command so the editor applies its own structure
+  // semantics (smart-fence, mode awareness, etc.). #? = caret placeholder.
+  let quick = null;
+  if (!opts.compact) {
+    quick = document.createElement('div');
+    quick.className = 'mf-quick';
+    quick.setAttribute('role', 'toolbar');
+    quick.setAttribute('aria-label', 'Quick math input');
+    const preset = (opts.quickPreset && _MF_QUICK[opts.quickPreset]) || _MF_QUICK.standard;
+    for (const it of preset) {
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.tabIndex = -1;
+      b.className = 'mf-quick-btn' + (it.cls ? ' ' + it.cls : '');
+      b.innerHTML = it.label;
+      b.title = it.title || '';
+      b.dataset.mfInsert = it.insert;
+      if (it.cmd) b.dataset.mfCmd = it.cmd;
+      b.addEventListener('pointerdown', e => e.preventDefault());
+      b.addEventListener('click', () => mfQuickInsert(mf, b));
+      quick.appendChild(b);
+    }
+    wrap.appendChild(quick);
   }
+  // Move the mirror into the wrap so it stays adjacent to its editor —
+  // but since .mf-mirror clips it to 1px and absolute-positions it,
+  // its physical position doesn't affect layout.
+  wrap.appendChild(originalInput);
 
-  let display = null;
-  function _enterEdit() {
+  // Mirror is permanently hidden via .mf-mirror (display:none !important).
+  // No "loading placeholder" state — that pattern produced the duplicate-
+  // input regression because the mirror briefly looked like a real input.
+  // The math-field itself acts as the only visible surface; if MathLive
+  // hasn't loaded yet, the empty shell renders briefly with no functional
+  // UI but never a duplicate input.
+  originalInput.classList.add('mf-mirror');
+  originalInput.tabIndex = -1;
+  originalInput.setAttribute('aria-hidden', 'true');
+
+  // Once MathLive is registered, configure the field and wire events.
+  _MF_READY.then(() => {
+
+    // ── Editor behavior tuning ─────────────────────────────────────────
+    // 1. Silence every sound the editor can play. Multiple property names
+    //    are tried because the MathLive API has shifted across versions.
+    //    The "plonk" sound on invalid backspace (e.g. at start of an empty
+    //    field) is annoying and unprofessional for a calculator UX.
+    try { mf.soundsDirectory  = 'none'; } catch(_) {}
+    try { mf.soundsDirectory  = null;    } catch(_) {}
+    try { mf.plonkSound       = null;    } catch(_) {}
+    try { mf.keypressSound    = null;    } catch(_) {}
+    try { mf.spacebarKeypressSound = null; } catch(_) {}
+    try { mf.returnKeypressSound   = null; } catch(_) {}
+    try { mf.deleteKeypressSound   = null; } catch(_) {}
+    // Globally also: silence the MathLive virtual keyboard's sound bus.
     try {
-      target.focus({ preventScroll: true });
-      // Place caret at end of content for click-to-edit. The user can
-      // adjust with subsequent clicks/keys.
-      const end = target.value.length;
-      try { target.setSelectionRange(end, end); } catch(_) {}
-    } catch(_) {}
-  }
-
-  if (useOverlay) {
-    display = document.createElement('div');
-    display.className = 'mi-display';
-    display.setAttribute('aria-hidden', 'true');
-    const inner = document.createElement('span');
-    inner.className = 'mi-display-inner';
-    display.appendChild(inner);
-    wrap.appendChild(display);
-
-    // Match the underlying input's chrome (background, border, radius,
-    // padding) so the swap between "textarea visible" and "rendered visible"
-    // is visually seamless regardless of the host context (solver card, calc
-    // display-header, dense fn-input row, etc.). Computed at attach time —
-    // theme changes still re-render correctly because CSS variables
-    // propagate via the input itself.
-    try {
-      const cs = window.getComputedStyle(target);
-      // Background: keep CSS-defined unless target is transparent (e.g. calc
-      // #expr inside display-header), in which case keep the display also
-      // transparent so it doesn't paint a box over its parent's background.
-      const tbg = cs.backgroundColor;
-      const isTransparent = !tbg || tbg === 'rgba(0, 0, 0, 0)' || tbg === 'transparent';
-      if (isTransparent) {
-        display.style.background = 'transparent';
-        display.style.border = '1px solid transparent';
-      } else {
-        display.style.background = tbg;
-        display.style.borderColor = cs.borderTopColor || 'transparent';
-        display.style.borderWidth = cs.borderTopWidth || '1px';
-        display.style.borderStyle = cs.borderTopStyle || 'solid';
+      if (window.mathVirtualKeyboard) {
+        window.mathVirtualKeyboard.soundsDirectory = null;
       }
-      // Radius + padding always match.
-      display.style.borderRadius = cs.borderRadius || '12px';
-      const padTop = parseFloat(cs.paddingTop) || 0;
-      const padBot = parseFloat(cs.paddingBottom) || 0;
-      const padLeft = parseFloat(cs.paddingLeft) || 0;
-      // Right padding gets a +28px bump when there's a trigger so content
-      // doesn't slide under the ƒ button. Compact rows have no trigger so
-      // they keep the input's natural right padding.
-      const padRight = (parseFloat(cs.paddingRight) || 0) + (showTrigger ? 28 : 0);
-      display.style.padding = `${padTop}px ${padRight}px ${padBot}px ${padLeft}px`;
     } catch(_) {}
 
-    // Tapping the rendered math switches to edit mode. Use pointerdown
-    // (not click) so the textarea is focused before any other handler
-    // (especially the global pointerdown that prevents button focus shifts).
-    display.addEventListener('pointerdown', (e) => {
-      if (wrap.dataset.state !== 'rendered') return;
-      e.preventDefault();
-      _enterEdit();
+    // 2. Smart-fence ON: auto-pair parens / brackets when user types `(`.
+    //    Smart-mode OFF: the "type-as-text intelligence" feature in MathLive
+    //    0.99 treats the letter `x` between two operands as a multiplication
+    //    operator. That heuristic silently rewrote `32x + 2` into `32 × + 2`,
+    //    then collapsed the adjacent `×+` and dropped the `×`, leaving the
+    //    visible (and evaluated) expression `32 + 2` and erasing the user's
+    //    variable. We keep MathLive's structural editor benefits via explicit
+    //    inline shortcuts below for the cases users actually need (`/` →
+    //    fraction, `sqrt` → radical, `pi` → π, function names → \sin etc.).
+    try { mf.smartMode  = false; }          catch(_) {}
+    try { mf.smartFence = true; }           catch(_) {}
+    // 3. Don't strip parens around composite numerators/exponents — the
+    //    user typed them on purpose.
+    try { mf.removeExtraneousParentheses = false; } catch(_) {}
+    // 4. Keep the caret INSIDE the superscript after typing a digit so users
+    //    can type multi-digit exponents (10, 12, -3, n+1, etc.) naturally.
+    //    With smartSuperscript=true MathLive auto-exits the script after one
+    //    digit, which trapped users typing `5^12` into typing `5^1` then `2`
+    //    at base level. The caret now only leaves the superscript on explicit
+    //    arrow / click / typing a non-script-eligible token.
+    try { mf.smartSuperscript = false; } catch(_) {}
+    // 5. Friendlier root structure — keep parens around explicit groups
+    //    so the user can re-edit them.
+    try { mf.scriptDepth = [2, 3]; } catch(_) {}
+
+    // 4. Inline shortcuts: type-as-text patterns that get promoted to
+    //    structural math the moment they're complete. `/` is the big
+    //    one — Desmos-style fraction-on-slash with implicit numerator
+    //    capture. Spread the MathLive defaults first so we don't clobber
+    //    built-ins like `pi`, `theta`, etc.
+    try {
+      const existing = (typeof mf.inlineShortcuts === 'object' && mf.inlineShortcuts) || {};
+      mf.inlineShortcuts = Object.assign({}, existing, {
+        // `#@` = the implicit-argument capture (the token immediately to
+        // the left of the trigger). `#?` = caret-placeholder so the user
+        // can keep typing into the denominator.
+        '/'   : { value: '\\frac{#@}{#?}' },
+        // ASCII shorthand for common symbols
+        '<='  : '\\le ',
+        '>='  : '\\ge ',
+        '!='  : '\\ne ',
+        '*'   : '\\times ',
+        // Structural / common function shorthands
+        'sqrt': '\\sqrt{#?}',
+        'cbrt': '\\sqrt[3]{#?}',
+        'abs' : '\\left|#?\\right|',
+        // Constants
+        'pi'   : '\\pi ',
+        'theta': '\\theta ',
+        'inf'  : '\\infty ',
+        'oo'   : '\\infty ',
+        'ans'  : '\\operatorname{ans}',
+        // Trig / log function names — with smartMode disabled (to fix the
+        // `x`-as-times bug) MathLive no longer auto-promotes these from
+        // plain-letter sequences. Adding them explicitly here preserves the
+        // ergonomics so users can type `sin(x)` and get a proper `\sin`.
+        'sin'   : '\\sin',
+        'cos'   : '\\cos',
+        'tan'   : '\\tan',
+        'cot'   : '\\cot',
+        'sec'   : '\\sec',
+        'csc'   : '\\csc',
+        'asin'  : '\\arcsin',
+        'acos'  : '\\arccos',
+        'atan'  : '\\arctan',
+        'sinh'  : '\\sinh',
+        'cosh'  : '\\cosh',
+        'tanh'  : '\\tanh',
+        'log'   : '\\log',
+        'ln'    : '\\ln',
+        'exp'   : '\\exp',
+        'max'   : '\\max',
+        'min'   : '\\min',
+        // Other common Greek letters typed in long form
+        'alpha' : '\\alpha ',
+        'beta'  : '\\beta ',
+        'gamma' : '\\gamma ',
+        'delta' : '\\delta ',
+        'epsilon':'\\epsilon ',
+        'lambda': '\\lambda ',
+        'mu'    : '\\mu ',
+        'sigma' : '\\sigma ',
+        'omega' : '\\omega ',
+        'phi'   : '\\phi ',
+      });
+    } catch(_) {}
+    // Sync math-field → mirror. MathLive's `input` fires on every edit.
+    let syncTimer = null;
+    const pushToMirror = () => {
+      syncTimer = null;
+      let latex = '';
+      try { latex = mf.value || ''; } catch(_) {}
+      const text = latexToText(latex);
+      if (originalInput.value !== text) {
+        originalInput.value = text;
+        try { originalInput.dispatchEvent(new Event('input', { bubbles: true })); } catch(_) {}
+      }
+    };
+    mf.addEventListener('input', () => {
+      if (syncTimer) cancelAnimationFrame(syncTimer);
+      syncTimer = requestAnimationFrame(pushToMirror);
     });
+    // Block characters that destabilize the math-field interaction loop.
+    //   `"` — MathLive in math mode treats this as the opening of a text-mode
+    //         region which, combined with smart-fence pairing, can pathologically
+    //         freeze the calculator's input pipeline (a real stability bug, not
+    //         just an aesthetic issue). The math-field has no use for a literal
+    //         double quote anyway.
+    //   `\` — Would begin an unfinished LaTeX macro the user can't terminate
+    //         cleanly via keyboard, leaving the editor in an inconsistent state.
+    // We `preventDefault` BEFORE MathLive's own handler runs so the character
+    // is never inserted. Listener is registered before the Enter handler so
+    // order of dispatch is well-defined.
+    mf.addEventListener('keydown', (e) => {
+      if (e.key === '"' || e.key === '\\') {
+        e.preventDefault();
+        e.stopPropagation();
+      }
+    });
+    // Pass through Enter as a synthetic keydown on the mirror so existing
+    // keyboard handlers (calc, practice "check answer", graph "plot") still
+    // fire on Enter.
+    mf.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' && !e.shiftKey) {
+        // Push the latest value before the handler reads it.
+        pushToMirror();
+        const ev = new KeyboardEvent('keydown', { key:'Enter', bubbles:true, cancelable:true });
+        try { originalInput.dispatchEvent(ev); } catch(_) {}
+      }
+    });
+    // Make the focus state propagate (so any focus-driven UI like the
+    // adaptive-practice suggestion still works).
+    mf.addEventListener('focus', () => { try { originalInput.dispatchEvent(new Event('focus', { bubbles:true })); } catch(_) {} });
+    mf.addEventListener('blur',  () => { try { originalInput.dispatchEvent(new Event('blur',  { bubbles:true })); } catch(_) {} });
 
-    // Render whenever the source value changes. Debounced via rAF.
-    let scheduled = null;
-    const refresh = () => {
-      scheduled = null;
-      const empty = !target.value.trim();
-      const focused = (document.activeElement === target);
-      const state = empty ? 'empty' : (focused ? 'editing' : 'rendered');
-      wrap.dataset.state = state;
-      // Only re-render when we'll actually display the result.
-      if (state === 'rendered') renderMathTo(inner, target.value);
-    };
-    const schedule = () => {
-      if (scheduled) cancelAnimationFrame(scheduled);
-      scheduled = requestAnimationFrame(refresh);
-    };
-    target.addEventListener('input',  schedule);
-    target.addEventListener('focus',  schedule);
-    target.addEventListener('blur',   schedule);
-    // Some flows mutate target.value directly (history load, sync apply,
-    // symbol insertion). We can't observe assignments without proxies,
-    // so we expose an explicit ping that callers can use.
-    target._miRefresh = schedule;
-    refresh();
-  }
+    // Tune virtual-keyboard behavior: auto on touch devices; manual on
+    // desktop (physical keyboard handles everything natively).
+    try {
+      const isTouch = matchMedia && matchMedia('(any-pointer: coarse)').matches;
+      if (mf.mathVirtualKeyboardPolicy !== undefined) {
+        mf.mathVirtualKeyboardPolicy = isTouch ? 'auto' : 'manual';
+      }
+    } catch(_) {}
 
-  target._miTrigger = trigger;
-  target._miWrap = wrap;
-  return { wrap, trigger, display };
+    // Initial value: convert mirror.value (math.js text) → LaTeX so the
+    // math-field starts in sync with whatever the app loaded (URL params,
+    // history pin, sync hydrate, etc.).
+    try {
+      const initial = (originalInput.value || '').trim();
+      if (initial) {
+        let initLatex = '';
+        try { initLatex = textToTex(initial); } catch(_) { initLatex = initial; }
+        mf.value = initLatex;
+      }
+    } catch(_) {}
+
+    // Refresh helper: code that programmatically writes `mirror.value = …`
+    // calls this to re-sync the visible math-field.
+    originalInput._mfSync = () => {
+      const want = (originalInput.value || '').trim();
+      let wantLatex = '';
+      try { wantLatex = want ? textToTex(want) : ''; } catch(_) { wantLatex = want; }
+      try { if ((mf.value || '') !== wantLatex) mf.value = wantLatex; } catch(_) {}
+    };
+
+    originalInput._mfElement = mf;
+  });
+
+  return mf;
 }
 
-/* Helper: programmatic value changes should call this so the rendered
-   overlay updates. Falls back gracefully when the input isn't enhanced. */
-function refreshMathInput(target) {
-  if (!target) return;
-  if (typeof target._miRefresh === 'function') {
-    try { target._miRefresh(); } catch(_) {}
+/* Public helper for any caller that programmatically updates a mirror's
+   value (loadQuestion, clearAll, sync hydrate). Falls back gracefully when
+   the input isn't mathfield-enhanced. */
+function syncMathField(originalInput) {
+  if (originalInput && typeof originalInput._mfSync === 'function') {
+    try { originalInput._mfSync(); } catch(_) {}
   }
 }
+// Back-compat alias for any caller that used the previous refresh name.
+function refreshMathInput(el) { syncMathField(el); }
 
-/* Boot: attach to known math-input targets. Tolerant of missing elements
-   so a tab that's removed/renamed doesn't break the others. */
+/* ─── End of math input system. Legacy overlay/popover code purged. ─── */
+/* The legacy overlay/popover system has been fully removed. The only
+   external entry point is preserved as a no-op for paranoia: any leftover
+   inline onclick="openGraphMathPopover(...)" we missed won't throw. */
+function openGraphMathPopover() { /* removed — was the popover launcher */ }
+const _LEGACY_PURGE_MARKER = 1;  // sentinel for future refactors
+
+/* The entire MATH_PALETTE, _mathPop singleton, attachMathInput function,
+   _lastFocusedFn focusin tracker, popover outside-click listener, and
+   graph-launcher focus preserver were deleted in this pass. They had been
+   sitting dead since the MathLive migration. Side effects from their
+   removal: zero — nothing active referenced them. */
+
+
+
+// (Legacy `refreshMathInput` definition removed — the active alias is
+// declared earlier and delegates to syncMathField. The original
+// implementation referenced the now-removed overlay state machine.)
+
+/* Boot: mount MathLive editors on every math-primary surface. The legacy
+   attachMathInput / popover stack is no longer invoked. Each call is
+   defensively try-wrapped so one missing element doesn't break the rest. */
 function _bootMathInputs() {
-  // Math-primary surfaces use the overlay model (rendered math IS the
-  // visible state when blurred, textarea visible only while editing).
-  try { attachMathInput(document.getElementById('solver-input'), 'solver'); } catch(_) {}
-  try { attachMathInput(document.getElementById('quiz-input'),   'practice'); } catch(_) {}
-  try { attachMathInput(document.getElementById('expr'),         'solver'); } catch(_) {}
-  // AI chat is conversational text (not math-primary). Keep the input
-  // permanently visible; just add the ƒ trigger for inserting math glyphs.
-  try { attachMathInput(document.getElementById('ci'),           'ai', { overlay:false }); } catch(_) {}
+  try { setupMathField(document.getElementById('solver-input'), { multiline: true, placeholder: 'expression', quickPreset: 'standard' }); } catch(_) {}
+  try { setupMathField(document.getElementById('quiz-input'),   { placeholder: 'your answer', quickPreset: 'practice' }); } catch(_) {}
+  try { setupMathField(document.getElementById('expr'),         { multiline: true, placeholder: 'expression', quickPreset: 'standard' }); } catch(_) {}
+  // AI chat is conversational text — math-field would feel wrong there.
+  // Keep the raw input; no editor enhancement applied.
+
+  // Restore the last-known answer for `ans` continuity across reloads.
+  try {
+    const stored = localStorage.getItem('mathix_last_ans');
+    if (stored != null && stored !== '') {
+      const n = Number(stored);
+      if (isFinite(n)) _mathLastAns = n;
+    }
+  } catch(_) {}
+  _refreshAnsButtons();
 }
 if (document.readyState === 'loading') {
   document.addEventListener('DOMContentLoaded', _bootMathInputs, { once: true });
@@ -8298,31 +8649,7 @@ function _clearLegacyMathBarSlot() {
 }
 setTimeout(_clearLegacyMathBarSlot, 0);
 
-/* Graph "Insert symbol" launcher.
-   Tracks the most-recently-focused fn-input so the popover knows which
-   function expression to insert into. The launcher button itself
-   pointerdown-preventDefault's so it doesn't steal focus before our
-   handler reads it. */
-let _lastFocusedFn = null;
-document.addEventListener('focusin', (e) => {
-  if (e.target && e.target.classList && e.target.classList.contains('fn-input')) {
-    _lastFocusedFn = e.target;
-  }
-});
-function openGraphMathPopover(triggerBtn) {
-  // Default to the first fn-input if none was focused yet.
-  let target = _lastFocusedFn;
-  if (!target || !document.body.contains(target)) {
-    target = document.querySelector('.fn-input');
-  }
-  if (!target) return;
-  _mathPop.open(target, triggerBtn, 'graph');
-}
-// Prevent the launcher from stealing focus when tapped (so _lastFocusedFn stays accurate).
-document.addEventListener('pointerdown', (e) => {
-  const t = e.target && e.target.closest && e.target.closest('#graph-math-launcher');
-  if (t) e.preventDefault();
-}, { passive: false });
+
 function ripple(e) {
   const btn = e.currentTarget;
   const r = document.createElement('span'); r.className = 'rip';
@@ -8514,11 +8841,146 @@ function _caretDelete(el) {
   try { el.setSelectionRange(newPos, newPos); } catch(_) {}
   if (hasFocus) try { el.focus({ preventScroll: true }); } catch(_) {}
 }
-function ins(v) { _caretInsert(exprEl, v); liveCalc(); }
-function del()  { _caretDelete(exprEl); liveCalc(); }
+// Translate legacy calc-keypad tokens into LaTeX insertion templates so
+// every insertion path in the app goes through MathLive's structural
+// editor. `#?` is MathLive's caret-placeholder — the caret is positioned
+// inside the slot after insertion. This is what makes the keypad feel
+// integrated rather than "old buttons writing into a textarea".
+// Helper for "function name as upright text" — works for any math.js
+// function that has no special LaTeX rendering. Round-trips cleanly via
+// latexToText's `\operatorname{name}` → `name` rule.
+const _opname = (name) => `\\operatorname{${name}}(#?)`;
+const _LEGACY_INS_LATEX = {
+  // operators
+  '+':'+', '-':'-', '−':'-',
+  '×':'\\times ', '÷':'\\div ',
+  '*':'\\times ', '/':'\\frac{#@}{#?}',
+  '(':'(', ')':')',
+  '%':'\\%',
+  ',':',', '=':'=',
+  // structural
+  '^':'^{#?}', '^2':'^{2}', '^3':'^{3}',
+  'sqrt(':'\\sqrt{#?}',
+  'cbrt(':'\\sqrt[3]{#?}',
+  '10^(':'10^{#?}',
+  // trig
+  'sin(':'\\sin(#?)',   'cos(':'\\cos(#?)',   'tan(':'\\tan(#?)',
+  'asin(':'\\arcsin(#?)','acos(':'\\arccos(#?)','atan(':'\\arctan(#?)',
+  'sinh(':'\\sinh(#?)', 'cosh(':'\\cosh(#?)', 'tanh(':'\\tanh(#?)',
+  'cot(':'\\cot(#?)',
+  // log / exp
+  'log(':'\\log(#?)', 'log10(':'\\log_{10}(#?)', 'log2(':'\\log_{2}(#?)',
+  'ln(':'\\ln(#?)',   'exp(':'\\exp(#?)',
+  // structural functions
+  'abs(':'\\left|#?\\right|',
+  'floor(':'\\lfloor #?\\rfloor',
+  'ceil(':'\\lceil #?\\rceil',
+  'factorial(':'(#?)!',
+  // discrete / number theory
+  'gcd(':_opname('gcd'),   'lcm(':_opname('lcm'),
+  'mod(':_opname('mod'),
+  'isPrime(':_opname('isPrime'),
+  'fib(':_opname('fib'),
+  'round(':_opname('round'),
+  'fix(':_opname('trunc'),  // trunc — visual; math.js name is `fix`
+  'sign(':_opname('sign'),
+  // statistics
+  'mean(':_opname('mean'),
+  'median(':_opname('median'),
+  'std(':_opname('std'),
+  'variance(':_opname('variance'),
+  'max(':'\\max(#?)',
+  'min(':'\\min(#?)',
+  'permutations(':_opname('permutations'),
+  'combinations(':'\\binom{#?}{#?}',
+  // calculus (symbolic; math.js can't evaluate these but they render
+  // correctly so the user sees real math, and AI step-by-step paths
+  // receive the structural form)
+  "derivative('":'\\frac{d}{dx}\\left(#?\\right)',
+  'integrate(':'\\int #?\\, d#?',
+  'limit(':'\\lim_{#?\\to #?}\\, #?',
+  'sum(':'\\sum_{#?}^{#?}\\, #?',
+  'product(':'\\prod_{#?}^{#?}\\, #?',
+  'partial(':'\\frac{\\partial #?}{\\partial #?}',
+  'gradient(':'\\nabla #?',
+  'partialSecond(':'\\frac{\\partial^2 #?}{\\partial #?^2}',
+  'contour(':'\\oint #?\\, d#?',
+  'tripleInt(':'\\iiint #?\\, dV',
+  // constants
+  'π':'\\pi ', 'pi':'\\pi ',
+  'e':'e',
+  'i':'i',
+  'θ':'\\theta ',
+  '∞':'\\infty ',
+  'Infinity':'\\infty ',
+  '1.6180339887':'\\varphi ',  // phi (golden ratio) — render as φ
+  '299792458':'c',              // speed of light
+  '9.80665':'g',                // standard gravity
+  '6.2831853':'\\tau ',          // 2π
+  'sqrt(2)':'\\sqrt{2}',
+  'sqrt(3)':'\\sqrt{3}',
+  // geometry conversions / prefixes
+  '(pi/180)*':'\\frac{\\pi}{180}\\times ',
+  '(180/pi)*':'\\frac{180}{\\pi}\\times ',
+  'pi*':'\\pi\\times ',
+  'sqrt((':'\\sqrt{(#?',
+  // history-load default fallbacks
+  '(':'(',
+};
+
+function _mfInsert(latex) {
+  const mf = exprEl && exprEl._mfElement;
+  if (mf && mf.executeCommand) {
+    try {
+      mf.focus();
+      mf.executeCommand(['insert', latex, { focus: true, feedback: false, scrollIntoView: true, mode: 'math' }]);
+      return true;
+    } catch(_) {}
+  }
+  return false;
+}
+
+function ins(v) {
+  // Map legacy keypad value → LaTeX. If a single digit/letter/operator
+  // wasn't in the table, fall through to verbatim insert.
+  const latex = (_LEGACY_INS_LATEX[v] !== undefined) ? _LEGACY_INS_LATEX[v] : v;
+  if (!_mfInsert(latex)) {
+    // Fallback: math-field hasn't loaded — append to the mirror so the
+    // calculator still functions, then liveCalc() handles re-render.
+    exprEl.value = (exprEl.value || '') + v;
+    try { exprEl.dispatchEvent(new Event('input', { bubbles: true })); } catch(_) {}
+  }
+  liveCalc();
+}
+function del() {
+  const mf = exprEl && exprEl._mfElement;
+  if (mf && mf.executeCommand) {
+    // Empty-field guard. Without this, hammering ⌫ on an empty editor calls
+    // MathLive's deleteBackward repeatedly even though there's nothing to
+    // delete — that's what produces the residual "plonk" feedback even with
+    // sounds nominally silenced, and it's noise on the event loop. Skip the
+    // dispatch entirely when there's nothing to delete.
+    const currentLatex = (() => { try { return mf.value || ''; } catch(_) { return ''; } })();
+    const mirrorText = (exprEl.value || '').trim();
+    if (!currentLatex.trim() && !mirrorText) {
+      return;
+    }
+    try {
+      mf.focus();
+      // deleteBackward = one logical character/structure-step at a time,
+      // exactly matching the brief's Desmos-like requirement. MathLive
+      // collapses structures only when the caret is at their boundary.
+      mf.executeCommand('deleteBackward');
+    } catch(_) {}
+  } else if (exprEl.value) {
+    exprEl.value = exprEl.value.slice(0, -1);
+    try { exprEl.dispatchEvent(new Event('input', { bubbles: true })); } catch(_) {}
+  }
+  liveCalc();
+}
 function clearAll() {
-  exprEl.value=''; rnumEl.textContent=''; reqEl.style.opacity=0; rtagEl.textContent='';
-  try { refreshMathInput(exprEl); } catch(_) {}
+  exprEl.value=''; rnumEl.textContent=''; delete rnumEl.dataset.raw; reqEl.style.opacity=0; rtagEl.textContent='';
+  try { syncMathField(exprEl); } catch(_) {}
 }
 // Prevent any on-screen "math button" from stealing focus away from a focused
 // input (which would also close the soft keyboard mid-edit, or — worse — open
@@ -8530,7 +8992,7 @@ document.addEventListener('pointerdown', (e) => {
   // math-bar buttons. Without this, tapping any of these would shift
   // focus to the button and close the soft keyboard (or worse — open it
   // unexpectedly when an unrelated tap propagated to a button).
-  const t = e.target && e.target.closest && e.target.closest('.btn,.math-bar-btn,.mp-btn,.mi-trigger');
+  const t = e.target && e.target.closest && e.target.closest('.btn,.mp-btn,.mi-trigger,.mi-toggle');
   if (t) e.preventDefault();
 }, { passive: false });
 
@@ -8593,30 +9055,47 @@ function _looksUnfinished(s) {
   return false;
 }
 
+// Build the evaluation scope. Currently just `ans` (previous result), but
+// extending here is the canonical place to add named constants/memories.
+function _evalScope() {
+  const scope = {};
+  if (_mathLastAns != null) scope.ans = _mathLastAns;
+  return scope;
+}
+
 function liveCalc() {
   const raw = exprEl.value.trim();
-  if (!raw) { rnumEl.textContent=''; reqEl.style.opacity=0; rtagEl.textContent=''; return; }
+  if (!raw) { rnumEl.textContent=''; delete rnumEl.dataset.raw; reqEl.style.opacity=0; rtagEl.textContent=''; return; }
   if (raw.includes('=')) return;
   // Don't show garbled partial results while user is mid-typing.
-  if (_looksUnfinished(raw)) { rnumEl.textContent=''; reqEl.style.opacity=0; rtagEl.textContent=''; return; }
+  if (_looksUnfinished(raw)) { rnumEl.textContent=''; delete rnumEl.dataset.raw; reqEl.style.opacity=0; rtagEl.textContent=''; return; }
 
   // Try math.js first (fast, numeric)
   try {
-    const r = math.evaluate(sanitize(raw));
+    const r = math.evaluate(sanitize(raw), _evalScope());
     if (typeof r === 'number' || (r && typeof r.re === 'number') || Array.isArray(r)) {
       rnumEl.textContent = fmt(r);
+      delete rnumEl.dataset.raw;
       reqEl.style.opacity = 1;
       rtagEl.textContent = '';
+      // NOTE: We intentionally do NOT update `_mathLastAns` here. liveCalc
+      // runs on every keystroke, and committing intermediate values would
+      // corrupt `ans` — e.g. after `10*10 = 100`, typing `ans/100` would
+      // overwrite ans to 10, then to 1, before the user pressed Enter. `ans`
+      // is only committed by calc() on an explicit Enter / `=`.
       return;
     }
   } catch(e) {}
 
-  // Try Algebrite for symbolic expressions (has variables)
+  // Try Algebrite for symbolic expressions (has variables). Render via KaTeX
+  // so users see real math notation (fractions stacked, exponents raised,
+  // radicals drawn) instead of raw text like `x^2 + 2x + 1`.
   try {
     if (typeof Algebrite !== 'undefined') {
       const result = Algebrite.run(raw);
       if (_isUsableAlgebriteResult(result, raw)) {
-        rnumEl.textContent = result;
+        renderMathTo(rnumEl, result);
+        rnumEl.dataset.raw = result;
         reqEl.style.opacity = 1;
         rtagEl.textContent = 'simplified';
         return;
@@ -8626,6 +9105,7 @@ function liveCalc() {
 
   // Nothing usable yet — clear the result line so we don't show a stale or confusing value.
   rnumEl.textContent = '';
+  delete rnumEl.dataset.raw;
   reqEl.style.opacity = 0;
   rtagEl.textContent = '';
 }
@@ -8736,6 +9216,7 @@ function calc() {
   // user instead of running the parser and getting a low-quality error.
   if (_looksUnfinished(raw)) {
     rnumEl.textContent = '';
+    delete rnumEl.dataset.raw;
     reqEl.style.opacity = 0;
     rtagEl.textContent = '';
     exprEl.classList.add('shake');
@@ -8745,26 +9226,42 @@ function calc() {
   }
 
   let f = null;
+  let numericResult = null;
+  let isSymbolic = false;
 
   // Try math.js (numeric, fast)
   try {
-    const result = math.evaluate(sanitize(raw));
+    const result = math.evaluate(sanitize(raw), _evalScope());
+    if (typeof result === 'number' && isFinite(result)) numericResult = result;
     f = fmt(result);
   } catch(e) {}
+  // Capture `ans` for the next expression — but only on success.
+  if (numericResult != null) {
+    setLastAns(numericResult);
+    try { localStorage.setItem('mathix_last_ans', String(numericResult)); } catch(_) {}
+  }
 
   // If math.js failed or returned something unhelpful, try Algebrite (symbolic)
   if (!f || f === raw) {
     try {
       if (typeof Algebrite !== 'undefined') {
         const alg = Algebrite.run(raw);
-        if (_isUsableAlgebriteResult(alg, raw)) f = alg;
+        if (_isUsableAlgebriteResult(alg, raw)) { f = alg; isSymbolic = true; }
       }
     } catch(e) {}
   }
 
   if (f) {
     curExpr = raw; curResult = f;
-    animateResult(rnumEl, f);
+    if (isSymbolic) {
+      // Symbolic result (Algebrite) — KaTeX-render so users see proper math
+      // notation. Stash the raw form on dataset.raw for copy/share readers.
+      renderMathTo(rnumEl, f);
+      rnumEl.dataset.raw = f;
+    } else {
+      delete rnumEl.dataset.raw;
+      animateResult(rnumEl, f);
+    }
     reqEl.style.opacity = 1;
     rnumEl.classList.remove('pop');
     void rnumEl.offsetWidth;
@@ -8782,6 +9279,7 @@ function calc() {
     }
   } else {
     rnumEl.textContent = 'Error';
+    delete rnumEl.dataset.raw;
     curResult = ''; // important for renderWhatsNext gating
     try { renderWhatsNext(); } catch(e) {}
     exprEl.classList.add('shake');
@@ -9055,6 +9553,47 @@ function _readUnlocks() {
 }
 function _saveUnlocks(u) { try { safeSetItem('mathix_ach_unlocked', JSON.stringify(u)); } catch(_) {} }
 
+// One-shot migration: prior versions auto-called 5 converter functions on page
+// load (data, angle, frequency, force, power), each of which recorded itself in
+// convertersUsed. This silently unlocked conv_5 ("Unit Wrangler") for users who
+// hadn't actually visited 5 categories. Strip those 5 auto-init categories and
+// revoke conv_5 if it no longer qualifies — but only for users who haven't
+// already legitimately earned conv_all (>=15), to avoid clobbering real progress.
+(function _migrateBuggyConvAchievements(){
+  try {
+    if (localStorage.getItem('mathix_mig_conv_autoinit') === '1') return;
+    const AUTO = new Set(['data','angle','frequency','force','power']);
+    const ach = JSON.parse(localStorage.getItem('mathix_ach_state') || '{}');
+    const unlocked = JSON.parse(localStorage.getItem('mathix_ach_unlocked') || '{}');
+    if (!unlocked.conv_all && Array.isArray(ach.convertersUsed)) {
+      ach.convertersUsed = ach.convertersUsed.filter(c => !AUTO.has(c));
+      if (ach.convertersUsed.length < 5 && unlocked.conv_5) delete unlocked.conv_5;
+      localStorage.setItem('mathix_ach_state', JSON.stringify(ach));
+      localStorage.setItem('mathix_ach_unlocked', JSON.stringify(unlocked));
+    }
+    localStorage.setItem('mathix_mig_conv_autoinit', '1');
+  } catch(_) {}
+})();
+
+// One-shot migration: prior versions called bumpGraphsPlotted() inside
+// plotGraph() on every keystroke / pan / zoom / mode switch, racing graphsPlotted
+// past graph_10 ("Plotter") without real plotting. Reset to a conservative 1
+// (one tab visit) for users who haven't earned the legitimate graph_50.
+(function _migrateBuggyGraphsPlotted(){
+  try {
+    if (localStorage.getItem('mathix_mig_graph_overcount') === '1') return;
+    const ach = JSON.parse(localStorage.getItem('mathix_ach_state') || '{}');
+    const unlocked = JSON.parse(localStorage.getItem('mathix_ach_unlocked') || '{}');
+    if (!unlocked.graph_50 && (ach.graphsPlotted|0) > 1) {
+      ach.graphsPlotted = 1;
+      if (unlocked.graph_10) delete unlocked.graph_10;
+      localStorage.setItem('mathix_ach_state', JSON.stringify(ach));
+      localStorage.setItem('mathix_ach_unlocked', JSON.stringify(unlocked));
+    }
+    localStorage.setItem('mathix_mig_graph_overcount', '1');
+  } catch(_) {}
+})();
+
 // Helpers for mastery + multi-day bookkeeping.
 function _maxQuizzesInOneDay(c) {
   let m = 0;
@@ -9249,8 +9788,22 @@ function bumpStepsViewed()           { _bumpAch(s => { s.stepsViewed = (s.stepsV
 function bumpGraphsPlotted()         { _bumpAch(s => { s.graphsPlotted = (s.graphsPlotted|0) + 1; }); }
 function bumpScansRun()              { _bumpAch(s => { s.scansRun = (s.scansRun|0) + 1; }); }
 function recordTopicTried(topic)     { if (!topic) return; _bumpAch(s => { if (!s.topicsTried.includes(topic)) s.topicsTried.push(topic); }); }
-function recordFeatureUsed(feature)  { if (!feature) return; _bumpAch(s => { if (!s.featuresUsed.includes(feature)) s.featuresUsed.push(feature); }); }
-function recordConverterUsed(cat)    { if (!cat) return; _bumpAch(s => { if (!s.convertersUsed.includes(cat)) s.convertersUsed.push(cat); }); }
+// Page-load converter auto-init suppression flag. Declared BEFORE the
+// functions that read it so neither hits a temporal-dead-zone error if
+// called during script init. Set true only while convertData/convertAng/etc.
+// run from the setTimeout(0) boot pass at the bottom of the script.
+let _suppressConvRecord = false;
+function recordFeatureUsed(feature)  {
+  if (!feature) return;
+  // Mirror the same auto-init suppression we apply to recordConverterUsed:
+  // the page-load converter auto-compute calls (convertData/convertAng/etc.)
+  // would otherwise add 'converter' to featuresUsed without any user
+  // interaction. Suppressed only for 'converter' so other features (calc,
+  // solver, etc.) remain user-driven by their own call sites.
+  if (_suppressConvRecord && feature === 'converter') return;
+  _bumpAch(s => { if (!s.featuresUsed.includes(feature)) s.featuresUsed.push(feature); });
+}
+function recordConverterUsed(cat)    { if (!cat || _suppressConvRecord) return; _bumpAch(s => { if (!s.convertersUsed.includes(cat)) s.convertersUsed.push(cat); }); }
 function recordQuizCompleted(opts)   {
   _bumpAch(s => {
     s.quizzes = (s.quizzes|0) + 1;
@@ -9573,7 +10126,18 @@ function exportHistPDF() {
   setTimeout(() => win.print(), 400);
 }
 
-function loadHist(i) { if (!history[i]) return; exprEl.value=history[i].expr; curExpr=history[i].expr; curResult=history[i].res; rnumEl.textContent=history[i].res; reqEl.style.opacity=1; exprEl.focus(); }
+function loadHist(i) {
+  if (!history[i]) return;
+  exprEl.value = history[i].expr;
+  curExpr = history[i].expr; curResult = history[i].res;
+  // Render via KaTeX so symbolic results (e.g. `x^2 + 2x + 1`) appear as
+  // proper math notation. Plain numeric strings pass through unchanged.
+  try { renderMathTo(rnumEl, history[i].res); } catch(_) { rnumEl.textContent = history[i].res; }
+  rnumEl.dataset.raw = history[i].res;
+  reqEl.style.opacity = 1;
+  try { syncMathField(exprEl); } catch(_) {}
+  try { (exprEl._mfElement || exprEl).focus(); } catch(_) {}
+}
 function clearHist() {
   history = [];
   try { localStorage.removeItem('mathix_hist'); } catch(e) {}
@@ -9586,13 +10150,18 @@ renderHist();
    COPY + SHARE
 ═══════════════════════════════════════════════ */
 function copyRes() {
-  if (!rnumEl.textContent) { toast('Nothing to copy'); return; }
-  navigator.clipboard.writeText(rnumEl.textContent).then(() => toast('✓ Result copied!'));
+  // Prefer the raw symbolic form when present (set by KaTeX-rendered Algebrite
+  // results) — textContent of a KaTeX-rendered element loses superscripts
+  // and structural cues that are recoverable from the original string.
+  const text = (rnumEl.dataset && rnumEl.dataset.raw) || rnumEl.textContent;
+  if (!text) { toast('Nothing to copy'); return; }
+  navigator.clipboard.writeText(text).then(() => toast('✓ Result copied!'));
 }
 function shareResult() {
   const expr = exprEl.value.trim();
   if (!expr) { toast('Enter an expression to share'); return; }
-  const url = `${location.href.split('?')[0]}?expr=${encodeURIComponent(expr)}&result=${encodeURIComponent(rnumEl.textContent)}`;
+  const resultText = (rnumEl.dataset && rnumEl.dataset.raw) || rnumEl.textContent;
+  const url = `${location.href.split('?')[0]}?expr=${encodeURIComponent(expr)}&result=${encodeURIComponent(resultText)}`;
   navigator.clipboard.writeText(url).then(() => toast('✓ Share link copied to clipboard!'));
 }
 
@@ -9954,14 +10523,21 @@ function setStype(t, btn) {
 }
 
 function setExample(text) {
-  document.getElementById('solver-input').value = text;
-  document.getElementById('solver-input').focus();
+  const el = document.getElementById('solver-input');
+  el.value = text;
+  // Push the new value into the visible math-field — programmatic
+  // assignments don't fire `input` so the editor would otherwise stay empty.
+  try { syncMathField(el); } catch(_) {}
+  // Focus the math-field (not the hidden mirror, which is unreachable).
+  try { (el._mfElement || el).focus(); } catch(_) {}
 }
 
 function clearSolver() {
   document.getElementById('solver-result').style.display = 'none';
-  document.getElementById('solver-input').value = '';
-  document.getElementById('solver-input').focus();
+  const el = document.getElementById('solver-input');
+  el.value = '';
+  try { syncMathField(el); } catch(_) {}
+  try { (el._mfElement || el).focus(); } catch(_) {}
 }
 
 function loadSolverIntoCalc() {
@@ -9969,8 +10545,12 @@ function loadSolverIntoCalc() {
   if (!raw) return;
   showPage('calc');
   exprEl.value = raw;
+  try { syncMathField(exprEl); } catch(_) {}
   curExpr = raw;
-  curResult = document.getElementById('sr-val').textContent;
+  // Prefer the raw answer stashed by renderSolverResult; fall back to
+  // textContent only if missing (e.g. solver result hasn't been rendered).
+  const srVal = document.getElementById('sr-val');
+  curResult = (srVal && srVal.dataset && srVal.dataset.raw) || (srVal ? srVal.textContent : '');
   rnumEl.textContent = curResult;
   reqEl.style.opacity = 1;
   toast('Loaded into calculator!');
@@ -10060,7 +10640,19 @@ If there are no roots (e.g. expansion/simplification), roots array should be emp
 
 function renderSolverResult(input, data) {
   document.getElementById('sr-title').textContent = data.type || 'Result';
-  document.getElementById('sr-val').textContent = data.answer || '—';
+  // Render the answer with KaTeX, matching the typography of the steps below.
+  // We stash the raw answer text on the element via dataset.raw so callers
+  // (loadSolverIntoCalc) can retrieve the plain math.js form, since reading
+  // textContent of KaTeX-rendered HTML produces noisy output.
+  const valEl = document.getElementById('sr-val');
+  if (data.answer) {
+    valEl.dataset.raw = data.answer;
+    valEl.innerHTML = `<span data-math="${escapeHtml(data.answer)}"></span>`;
+    try { renderAllMathIn(valEl); } catch(_) { valEl.textContent = data.answer; }
+  } else {
+    delete valEl.dataset.raw;
+    valEl.textContent = '—';
+  }
 
   // Render multiple roots if present
   const rootsEl = document.getElementById('sr-roots');
@@ -10071,11 +10663,21 @@ function renderSolverResult(input, data) {
       data.roots.map((r, i) => `
         <div class="solver-root-item">
           <div class="solver-root-label">Solution ${i+1}</div>
-          <div class="solver-root-val">${escapeHtml(r)}</div>
+          <div class="solver-root-val" data-math="${escapeHtml(r)}"></div>
         </div>`).join('') +
       '</div>';
-    // If we have multiple roots, update answer to show count
-    if (!data.answer) document.getElementById('sr-val').textContent = data.roots.join('  or  ');
+    try { renderAllMathIn(rootsEl); } catch(_) {}
+    // If we have multiple roots, update answer to show all roots rendered.
+    // Stash the joined raw form for loadSolverIntoCalc to retrieve.
+    if (!data.answer) {
+      valEl.dataset.raw = data.roots.join(' or ');
+      valEl.innerHTML = data.roots.map(r =>
+        `<span data-math="${escapeHtml(r)}"></span>`
+      ).join('  <span style="color:var(--text3)">or</span>  ');
+      try { renderAllMathIn(valEl); } catch(_) {
+        valEl.textContent = data.roots.join('  or  ');
+      }
+    }
   } else {
     rootsEl.style.display = 'none';
   }
@@ -10141,27 +10743,75 @@ function initGraph() {
   setupGraphInteraction();
 }
 
+// Alias for callers (URL hydration, formula presets, etc.) that historically
+// referenced renderFnInputs(). Always delegates to renderFnList() — keeps the
+// graph fn-input rebuild + math-field remount in one place.
+function renderFnInputs() { return renderFnList(); }
+
+// Shared graph quick-insert toolbar: tracks the most-recently-focused fn-input
+// by its DOM id (NOT element reference) so it never holds a stale pointer
+// across renderFnList's innerHTML rebuild. graphInsert resolves the live
+// element via getElementById on every click.
+let _graphActiveFnId = null;
+function _refreshGraphActiveFn() {
+  if (_graphActiveFnId && !document.getElementById(_graphActiveFnId)) {
+    _graphActiveFnId = null;
+  }
+}
+(function _wireGraphFocusTrack(){
+  // Defer until the #fn-list element exists. Re-runs on DOMContentLoaded if
+  // the script is parsed before the DOM is ready.
+  function wire() {
+    const list = document.getElementById('fn-list');
+    if (!list || list._focusWired) return;
+    list._focusWired = true;
+    list.addEventListener('focusin', (e) => {
+      const mf = e.target;
+      if (!mf || mf.tagName !== 'MATH-FIELD') return;
+      const wrap = mf.closest('.fn-input-wrap');
+      const input = wrap && wrap.querySelector('.fn-input');
+      if (input && input.id) _graphActiveFnId = input.id;
+    });
+  }
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', wire, { once: true });
+  } else {
+    wire();
+  }
+})();
+function graphInsert(latex) {
+  let input = _graphActiveFnId ? document.getElementById(_graphActiveFnId) : null;
+  if (!input) input = document.querySelector('#fn-list .fn-input');
+  const mf = input && input._mfElement;
+  if (!mf || !mf.executeCommand) return;
+  try {
+    mf.focus();
+    mf.executeCommand(['insert', latex, { focus:true, mode:'math', scrollIntoView:true, feedback:false }]);
+  } catch(_) {}
+}
+
 function renderFnList() {
   const list = document.getElementById('fn-list');
   list.innerHTML = '';
+  _refreshGraphActiveFn();
   graphFns.forEach((fn,i) => {
     const wrap = document.createElement('div');
     wrap.className = 'fn-input-wrap';
     const isHidden = graphHidden.includes(i);
+    // The visible editor is a <math-field>; the hidden mirror <input>
+    // keeps the existing plotGraph() integration trivial — `graphFns[i]`
+    // is mirrored from the math-field via the input event below.
     wrap.innerHTML = `
       <div class="fn-color" style="background:${colors[i%colors.length]}" onclick="toggleFnColor(${i})"></div>
-      <input class="fn-input" placeholder="e.g. sin(x)" value="${fn}" id="fn-inp-${i}"
-        oninput="graphFns[${i}]=this.value; refreshMathInput(this);"
-        onkeydown="if(event.key==='Enter')plotGraph()">
+      <input class="fn-input" placeholder="e.g. sin(x)" value="${escapeHtml(fn)}" id="fn-inp-${i}"
+        oninput="graphFns[${i}]=this.value;plotGraph()">
       <button class="fn-hidden-toggle ${isHidden?'hidden':''}" onclick="toggleFnHidden(${i})" title="${isHidden?'Show':'Hide'}">${isHidden?'○':'●'}</button>
       <button class="fn-del" onclick="removeFn(${i})">×</button>`;
     list.appendChild(wrap);
-    // Attach the overlay math-input system to each row. `compact` keeps the
-    // rendered display visually tight inside the dense fn-input-wrap, and
-    // disables the per-row ƒ trigger (the page-level "Insert symbol"
-    // launcher handles inserts for whichever fn-input was focused last).
+    // Mount the structural math editor on this row. Compact sizing fits
+    // the dense fn-input-wrap layout.
     try {
-      attachMathInput(wrap.querySelector('.fn-input'), 'graph', { compact: true });
+      setupMathField(wrap.querySelector('.fn-input'), { compact: true, placeholder: 'f(x)' });
     } catch(_) {}
   });
 }
@@ -10324,8 +10974,13 @@ function setupGraphInteraction() {
   }, {passive:false});
 }
 
+// Session-scoped Set of normalized fn fingerprints we've already counted as a
+// "plot" for achievement purposes. Prevents bumping graphsPlotted on every
+// keystroke / pan / zoom / mode switch — only distinct, successfully-rendered
+// function sets count.
+const _plotBumpedFps = new Set();
+
 function plotGraph() {
-  try { bumpGraphsPlotted(); recordFeatureUsed('graphing'); } catch(_) {}
   // Sync fn values
   graphFns = graphFns.map((_,i) => {
     const el = document.getElementById(`fn-inp-${i}`);
@@ -10532,6 +11187,21 @@ function plotGraph() {
       }
     }
   }
+
+  // Count this as a "plot" for achievements ONLY when (a) the function set is
+  // distinct from anything already counted this session and (b) at least one
+  // dataset actually produced numeric points (so partial/erroring expressions
+  // don't race the counter while the user is mid-typing).
+  try {
+    const validFns = graphFns.map(s => (s || '').trim()).filter(Boolean).sort();
+    const fp = validFns.length ? JSON.stringify(validFns) : '';
+    const anyPlotted = datasets.some(d => Array.isArray(d.data) && d.data.some(p => p && typeof p.y === 'number'));
+    if (fp && anyPlotted && !_plotBumpedFps.has(fp)) {
+      _plotBumpedFps.add(fp);
+      bumpGraphsPlotted();
+      recordFeatureUsed('graphing');
+    }
+  } catch(_) {}
 
   // Build chart
   const canvas = document.getElementById('graphCanvas');
@@ -10874,9 +11544,15 @@ function convertPwr() {
 }
 
 // Trigger initial computation so cards aren't blank on first load.
-setTimeout(() => { try {
-  convertData(); convertAng(); convertFrq(); convertFrc(); convertPwr();
-} catch(_) {} }, 0);
+// Suppress recordConverterUsed during the auto-init: these computations run
+// without user intent, so they must not bump achievement counters.
+setTimeout(() => {
+  _suppressConvRecord = true;
+  try {
+    convertData(); convertAng(); convertFrq(); convertFrc(); convertPwr();
+  } catch(_) {}
+  _suppressConvRecord = false;
+}, 0);
 
 /* ═══════════════════════════════════════════════
    FUNCTION REFERENCE
@@ -10890,7 +11566,6 @@ const fnRef = [
   {n:'asin(x)',d:'Inverse sine',e:'asin(1) = π/2',c:'trig'},
   {n:'acos(x)',d:'Inverse cosine',e:'acos(0) = π/2',c:'trig'},
   {n:'atan(x)',d:'Inverse tangent',e:'atan(1) = π/4',c:'trig'},
-  {n:'atan2(y,x)',d:'2-arg arctangent',e:'atan2(1,1) = π/4',c:'trig'},
   // Hyperbolic
   {n:'sinh(x)',d:'Hyperbolic sine',e:'sinh(0) = 0',c:'hyperbolic'},
   {n:'cosh(x)',d:'Hyperbolic cosine',e:'cosh(0) = 1',c:'hyperbolic'},
@@ -11008,7 +11683,11 @@ function shareSolverResult() {
   const inp = document.getElementById('solver-input');
   const ans = document.getElementById('sr-val');
   const expr = inp ? inp.value.trim() : '';
-  const answer = ans ? ans.textContent.trim() : '';
+  // Prefer the raw answer stashed by renderSolverResult (since textContent
+  // of KaTeX-rendered HTML produces noisy output with extra whitespace).
+  const answer = ans
+    ? ((ans.dataset && ans.dataset.raw) || ans.textContent.trim())
+    : '';
   if (!expr) { toast('Nothing to share yet — solve something first'); return; }
   const base = location.origin + location.pathname;
   const url = `${base}?tab=solver&expr=${encodeURIComponent(expr)}&result=${encodeURIComponent(answer)}`;
@@ -11089,6 +11768,7 @@ function shareGraph(fn) {
   if (tab === 'calc') {
     showPage('calc');
     exprEl.value = expr;
+    try { syncMathField(exprEl); } catch(_) {}
     curExpr = expr;
     if (result) { curResult = result; rnumEl.textContent = result; reqEl.style.opacity = 1; }
     else liveCalc();
@@ -11098,7 +11778,10 @@ function shareGraph(fn) {
     showPage('solver');
     setTimeout(() => {
       const inp = document.getElementById('solver-input');
-      if (inp) { inp.value = expr; }
+      if (inp) {
+        inp.value = expr;
+        try { syncMathField(inp); } catch(_) {}
+      }
       if (result) toast(`✓ Shared equation loaded — answer: ${result}`);
       else toast('✓ Shared equation loaded!');
     }, 100);
@@ -11643,7 +12326,9 @@ function showSolution(problem, answer, steps) {
 function loadScannedIntoCalc() {
   if (!scannedProblem) return;
   showPage('calc');
-  document.getElementById('expr').value = scannedProblem;
+  const exprElLocal = document.getElementById('expr');
+  exprElLocal.value = scannedProblem;
+  try { syncMathField(exprElLocal); } catch(_) {}
   document.getElementById('rnum').textContent = scannedAnswer;
   document.getElementById('req').style.opacity = 1;
   curExpr = scannedProblem;
@@ -11801,6 +12486,29 @@ function updateStatsDisplay() {
 }
 updateStatsDisplay();
 
+// Anti-repetition for practice problems. Tracks the last ~30 normalized question
+// texts across sessions so the AI prompt can warn the model away from repeats,
+// and so any near-duplicates that slip through get filtered structurally.
+function _normalizeQ(q) {
+  return String(q || '').toLowerCase().replace(/\s+/g, ' ').replace(/[.,;:!?]+\s*$/, '').trim();
+}
+function _getRecentQuestions() {
+  try { const v = JSON.parse(localStorage.getItem('mathix_recent_questions') || '[]'); return Array.isArray(v) ? v : []; }
+  catch(_) { return []; }
+}
+function _pushRecentQuestions(qs) {
+  if (!Array.isArray(qs) || !qs.length) return;
+  try {
+    const list = _getRecentQuestions();
+    for (const q of qs) {
+      const text = q && q.question;
+      if (text) list.push(text);
+    }
+    const trimmed = list.slice(-30);
+    localStorage.setItem('mathix_recent_questions', JSON.stringify(trimmed));
+  } catch(_) {}
+}
+
 async function startPractice() {
   const btn = document.getElementById('gen-btn-txt');
   btn.textContent = '⏳ Generating…';
@@ -11825,6 +12533,11 @@ async function startPractice() {
     exponents: 'exponent rules, simplification, scientific notation'
   };
 
+  const recent = _getRecentQuestions();
+  const recentText = recent.length
+    ? `\n\nAVOID generating problems similar to any of these recently shown:\n${recent.slice(-15).map(q => `- ${q}`).join('\n')}`
+    : '';
+
   const prompt = `Generate ${practiceQty} unique math practice problems about ${topicDesc[practiceTopic]}.
 Difficulty: ${diffDesc[practiceDiff]}.
 
@@ -11832,7 +12545,7 @@ RULES:
 - Each problem must have a clean, exact answer (integer or simple fraction or decimal)
 - Problems should be varied, not repetitive
 - No word problems — pure math notation only
-- Answers should be verifiable by a calculator
+- Answers should be verifiable by a calculator${recentText}
 
 Reply ONLY with a JSON array, no markdown, no backticks:
 [{"question":"the math problem as text","answer":"exact answer","hint":"one-sentence hint if stuck","explanation":"brief solution method"}]`;
@@ -11849,14 +12562,23 @@ Reply ONLY with a JSON array, no markdown, no backticks:
     if (!Array.isArray(parsed) || parsed.length === 0 || !parsed.every(p => p && p.question != null && p.answer != null)) {
       throw new Error('Practice generation returned an unexpected response');
     }
-    practiceSession = parsed;
+    // Structural filter: drop any AI output that duplicates a recent question
+    // (the model sometimes ignores the prompt-level anti-repeat instruction).
+    const recentSet = new Set(recent.map(_normalizeQ));
+    const filtered = parsed.filter(p => !recentSet.has(_normalizeQ(p.question)));
+    if (filtered.length < Math.max(1, Math.ceil(practiceQty / 2))) {
+      throw new Error('Too many duplicates after structural filter — falling back');
+    }
+    practiceSession = filtered;
     practiceIdx = 0;
     practiceSessionCorrect = 0;
+    _pushRecentQuestions(filtered);
     showQuiz();
   } catch(e) {
     practiceSession = getFallbackProblems(practiceTopic, practiceDiff, practiceQty);
     practiceIdx = 0;
     practiceSessionCorrect = 0;
+    _pushRecentQuestions(practiceSession);
     showQuiz();
     toast('Using local problems — AI unavailable');
   } finally {
@@ -11892,9 +12614,13 @@ function loadQuestion() {
 
   const inp = document.getElementById('quiz-input');
   inp.value = '';
-  inp.className = 'quiz-input';
+  inp.classList.remove('correct','wrong');
   inp.placeholder = t('practice.quiz.placeholder');
   inp.disabled = false;
+  // Programmatic value changes don't fire `input` events. Push the empty
+  // value into the visible math-field so the previous answer doesn't
+  // linger after Next Question.
+  try { syncMathField(inp); } catch(_) {}
 
   document.getElementById('quiz-feedback').style.display = 'none';
   document.getElementById('quiz-actions').style.display = 'none';
@@ -11916,7 +12642,8 @@ function checkAnswer() {
   if (!q) return;
   const correct = isCorrect(userAns, q.answer);
 
-  inp.className = 'quiz-input ' + (correct ? 'correct' : 'wrong');
+  inp.classList.remove('correct','wrong');
+  inp.classList.add(correct ? 'correct' : 'wrong');
   inp.disabled = true;
   const checkBtn2 = document.querySelector('.quiz-check-btn');
   if (checkBtn2) checkBtn2.disabled = true;
@@ -11932,11 +12659,25 @@ function checkAnswer() {
     practiceStats.streak++;
     if (practiceStats.streak > practiceStats.best) practiceStats.best = practiceStats.streak;
     practiceSessionCorrect++;
+    // Non-blocking simplification suggestion. If the user answered with a
+    // reducible fraction like `2/4`, the answer is still marked correct, but
+    // we surface the simplified form as a soft hint so the educational signal
+    // isn't lost. Never shown when their form already matches the simplest
+    // representation or when the answer isn't a pure single-fraction form.
+    try {
+      const suggestion = _suggestSimplifiedFraction(userAns);
+      if (suggestion) toast('Equivalent form: ' + suggestion, { variant: 'warn', duration: 4000 });
+    } catch(_) {}
   } else {
     fb.className = 'quiz-feedback wrong';
-    // Show the expected answer with KaTeX rendering so the user sees clean
-    // mathematical notation (½, x², √x) instead of `1/2`, `x^2`, `sqrt(x)`.
-    fb.innerHTML = `${escapeHtml(t('practice.fb.wrong'))} <strong class="qa-expected" data-math="${escapeHtml(q.answer)}" style="color:var(--text)"></strong>${q.hint ? `<br><span style="opacity:.8;font-size:13px">${escapeHtml(t('practice.fb.hint'))} <span data-math="${escapeHtml(q.hint)}"></span></span>` : ''}`;
+    // Expected answer: KaTeX render (it's pure math — fractions, exponents,
+    // radicals all need real notation).
+    // Hint: KaTeX would mangle prose like "Find common denominator first" by
+    // treating words as variables. Use prettyMath() instead — it converts
+    // math-y substrings to Unicode (pi → π, x^2 → x², 1/2 → ½) while leaving
+    // English prose untouched.
+    const hintPretty = q.hint ? prettyMath(q.hint) : '';
+    fb.innerHTML = `${escapeHtml(t('practice.fb.wrong'))} <strong class="qa-expected" data-math="${escapeHtml(q.answer)}" style="color:var(--text)"></strong>${q.hint ? `<br><span style="opacity:.8;font-size:13px">${escapeHtml(t('practice.fb.hint'))} ${escapeHtml(hintPretty)}</span>` : ''}`;
     renderAllMathIn(fb);
     practiceStats.streak = 0;
   }
@@ -11974,30 +12715,115 @@ function _numericEqual(u, e) {
   const mag = Math.max(1, Math.abs(u), Math.abs(e));
   return Math.abs(u - e) <= 1e-4 * mag;
 }
-function isCorrect(user, expected) {
-  const u = _normAns(user);
-  const e = _normAns(expected);
-  if (!u) return false;
-  if (u === e) return true;
-  // Strip leading "x=" / "y=" patterns from both sides for simple-variable answers.
-  const stripVar = s => s.replace(/^[a-z]\s*=\s*/, '');
-  if (stripVar(u) === stripVar(e)) return true;
-  // Pure-numeric tolerance check.
+// If user's answer is a plain reducible fraction (`a/b` with gcd > 1) return
+// its simplified `p/q` form; otherwise null. Intentionally conservative —
+// doesn't try to simplify expressions with variables, decimals, or anything
+// beyond a single bare integer fraction. Used only for the non-blocking
+// equivalent-form toast; never affects whether an answer is graded correct.
+function _suggestSimplifiedFraction(userText) {
+  if (!userText) return null;
+  // Strip leading parens from the math-field's `(a)/(b)` mirror output too.
+  const m = String(userText).replace(/\s+/g, '').match(/^\(?(-?\d+)\)?\/\(?(-?\d+)\)?$/);
+  if (!m) return null;
+  const a = parseInt(m[1], 10);
+  const b = parseInt(m[2], 10);
+  if (!isFinite(a) || !isFinite(b) || b === 0) return null;
+  function gcd(x, y) { x = Math.abs(x); y = Math.abs(y); while (y) { const r = x % y; x = y; y = r; } return x || 1; }
+  const g = gcd(a, b);
+  if (g <= 1) return null; // already simplest form
+  const ns = a / g, ds = b / g;
+  if (ds === 1) return String(ns);            // simplified to an integer
+  return (ns < 0 || (a < 0) !== (b < 0) ? '-' : '') + Math.abs(ns) + '/' + Math.abs(ds);
+}
+// Build the candidate "expected" forms a canonical answer string can take.
+// Practice problems express multi-root answers as "3 or -3", "2 or 0.5",
+// decimals-with-symbolic as "√3 ≈ 1.732", and the AI sometimes wraps as
+// "0.75 (or 3/4)". Yields the whole string PLUS each segment so per-candidate
+// matching covers everything without overfitting to one shape.
+function _answerCandidates(s) {
+  const raw = String(s == null ? '' : s).trim();
+  if (!raw) return [];
+  const out = [raw];
+  // Splits on " or " (case-insensitive), ";", and "," followed by a number.
+  const parts = raw.split(/\s+or\s+|\s*;\s*|\s*,\s*(?=[-+]?\d)/i);
+  if (parts.length > 1) {
+    for (const p of parts) {
+      const piece = p.trim().replace(/^[(\s]+|[)\s]+$/g, '');
+      if (piece && !out.includes(piece)) out.push(piece);
+    }
+  }
+  // "X ≈ Y" — emit both the symbolic side and the decimal.
+  for (const candRaw of [...out]) {
+    const m = candRaw.match(/^(.+?)\s*[≈~]\s*([-+]?\d[\d.,]*)\s*$/);
+    if (m) {
+      if (!out.includes(m[1].trim())) out.push(m[1].trim());
+      if (!out.includes(m[2].trim())) out.push(m[2].trim());
+    }
+  }
+  return out;
+}
+// Try to compute every numeric value embedded in a string. Handles bare
+// numbers ("0.75"), fractions ("3/4"), sqrt expressions ("sqrt(2)"), and any
+// substring that math.js can evaluate. Used so a user typing "3/4" matches
+// an expected of "0.75 (or 3/4)" regardless of how the AI shaped the string.
+// Coerce a math.js evaluation result to a finite number when possible.
+// Handles BigNumber / Fraction objects via valueOf(). Returns null if not
+// coercible — callers should treat null as "not a finite numeric value".
+function _toFiniteNumber(v) {
+  if (typeof v === 'number' && isFinite(v)) return v;
+  if (v && typeof v.valueOf === 'function') {
+    const n = v.valueOf();
+    if (typeof n === 'number' && isFinite(n)) return n;
+  }
+  if (v && typeof v.toNumber === 'function') {
+    try { const n = v.toNumber(); if (typeof n === 'number' && isFinite(n)) return n; } catch(_) {}
+  }
+  return null;
+}
+function _extractNumericValues(s) {
+  const out = [];
+  if (!s) return out;
+  const text = String(s);
+  // Whole-string evaluation first (after normalization).
   try {
-    const uv = math.evaluate(u);
-    const ev = math.evaluate(e);
-    if (typeof uv === 'number' && typeof ev === 'number' && _numericEqual(uv, ev)) return true;
-    if (uv && uv.equals && uv.equals(ev)) return true;
+    const v = math.evaluate(_normAns(text));
+    const n = _toFiniteNumber(v);
+    if (n != null) out.push(n);
   } catch(_) {}
-  // Algebraic equivalence by sampling — useful for expressions with a free variable.
-  // Try a handful of x values and require all to agree (numerical tolerance).
+  // Fractions like "3/4", "-3/4", "1/2".
+  const fracRe = /(-?\d+(?:\.\d+)?)\s*\/\s*(-?\d+(?:\.\d+)?)/g;
+  let m;
+  while ((m = fracRe.exec(text)) !== null) {
+    const a = parseFloat(m[1]), b = parseFloat(m[2]);
+    if (b !== 0 && isFinite(a / b)) out.push(a / b);
+  }
+  // sqrt(...) / √... substrings.
+  const sqrtRe = /(?:sqrt|√)\s*\(?\s*(-?\d+(?:\.\d+)?)\s*\)?/g;
+  while ((m = sqrtRe.exec(text)) !== null) {
+    const n = parseFloat(m[1]);
+    if (n >= 0 && isFinite(Math.sqrt(n))) out.push(Math.sqrt(n));
+  }
+  // Bare numerics.
+  const numRe = /-?\d+(?:\.\d+)?(?!\s*\/)/g;
+  while ((m = numRe.exec(text)) !== null) {
+    const n = parseFloat(m[0]);
+    if (isFinite(n)) out.push(n);
+  }
+  return out;
+}
+function _trySymbolicMatch(u, eNorm) {
+  if (u === eNorm) return true;
+  const stripVar = s => s.replace(/^[a-z]\s*=\s*/, '');
+  if (stripVar(u) === stripVar(eNorm)) return true;
+  // Algebraic equivalence by sampling — handles cases like
+  // "x^2+2x+1" ≡ "(x+1)^2" that text comparison misses.
   try {
     const samples = [-1.7, -0.5, 0.3, 1.1, 2.7, 4.3];
     let allEqual = true, anySucceeded = false;
     for (const x of samples) {
       try {
         const uv = math.evaluate(u, { x });
-        const ev = math.evaluate(e, { x });
+        const ev = math.evaluate(eNorm, { x });
         if (typeof uv === 'number' && typeof ev === 'number') {
           anySucceeded = true;
           if (!_numericEqual(uv, ev)) { allEqual = false; break; }
@@ -12006,6 +12832,36 @@ function isCorrect(user, expected) {
     }
     if (anySucceeded && allEqual) return true;
   } catch(_) {}
+  return false;
+}
+function isCorrect(user, expected) {
+  if (user == null || expected == null) return false;
+  const u = _normAns(user);
+  if (!u) return false;
+
+  // ── Numeric equivalence (the primary path) ──────────────────────────────
+  // Compute the user's numeric value once, then compare against every
+  // numeric value extracted from the expected string. This is what makes
+  // "3/4" equal "0.75", "2/4" equal "1/2", "√4" equal "2", "sin(pi/2)"
+  // equal "1", and tolerates AI wrappers like "0.75 (or 3/4)".
+  let userNum = null;
+  try {
+    const v = math.evaluate(u);
+    userNum = _toFiniteNumber(v);
+  } catch(_) {}
+  if (userNum != null) {
+    const expectedNums = _extractNumericValues(expected);
+    for (const en of expectedNums) {
+      if (_numericEqual(userNum, en)) return true;
+    }
+  }
+
+  // ── Symbolic equivalence (free-variable expressions, exact strings) ─────
+  for (const cand of _answerCandidates(expected)) {
+    const eNorm = _normAns(cand);
+    if (!eNorm) continue;
+    if (_trySymbolicMatch(u, eNorm)) return true;
+  }
   return false;
 }
 
@@ -12033,12 +12889,17 @@ Give 4-6 clear steps. Reply ONLY as JSON array:
     steps.forEach((s,i) => {
       const d = document.createElement('div');
       d.className = 'step-item'; d.style.animationDelay = i*.08+'s';
-      d.innerHTML = `<div class="step-n">${escapeHtml(s.step)}</div><div class="step-body"><div class="step-math" data-math="${escapeHtml(s.math)}"></div><div class="step-why">${escapeHtml(s.explanation)}</div>${s.rule?'<span class="step-rule">'+escapeHtml(s.rule)+'</span>':''}</div>`;
+      // Step math: KaTeX. Explanation: prettyMath so prose like "Apply
+      // distributive property" stays readable instead of being treated as
+      // math identifiers.
+      const explPretty = s.explanation ? prettyMath(String(s.explanation)) : '';
+      d.innerHTML = `<div class="step-n">${escapeHtml(s.step)}</div><div class="step-body"><div class="step-math" data-math="${escapeHtml(s.math)}"></div><div class="step-why">${escapeHtml(explPretty)}</div>${s.rule?'<span class="step-rule">'+escapeHtml(s.rule)+'</span>':''}</div>`;
       area.appendChild(d);
     });
     renderAllMathIn(area);
   } catch(e) {
-    area.innerHTML = `<div class="step-item"><div class="step-n">1</div><div class="step-body"><div class="step-math" data-math="${escapeHtml(q.question + ' = ' + q.answer)}"></div><div class="step-why">${escapeHtml(q.explanation || 'Solution: '+q.answer)}</div></div></div>`;
+    const fallbackExpl = q.explanation ? prettyMath(String(q.explanation)) : ('Solution: '+q.answer);
+    area.innerHTML = `<div class="step-item"><div class="step-n">1</div><div class="step-body"><div class="step-math" data-math="${escapeHtml(q.question + ' = ' + q.answer)}"></div><div class="step-why">${escapeHtml(fallbackExpl)}</div></div></div>`;
     renderAllMathIn(area);
   }
 }
@@ -12294,7 +13155,14 @@ function getFallbackProblems(topic, diff, qty) {
   const pool = banks[topic] || banks.algebra;
   const diffPool = pool[diff] || pool.easy || [];
   const shuffled = [...diffPool].sort(() => Math.random()-.5);
-  return shuffled.slice(0, Math.min(qty, shuffled.length));
+  // Filter against recently-shown questions so users don't see the same
+  // fallback problems back-to-back. If the filter empties the pool (small
+  // banks fully exhausted), fall back to the unfiltered shuffle so the user
+  // still gets problems.
+  const recentSet = new Set(_getRecentQuestions().map(_normalizeQ));
+  let filtered = shuffled.filter(p => !recentSet.has(_normalizeQ(p.question)));
+  if (!filtered.length) filtered = shuffled;
+  return filtered.slice(0, Math.min(qty, filtered.length));
 }
 
 /* ═══════════════════════════════════════════════
@@ -12334,7 +13202,7 @@ function toLatex(expr) {
     .replace(/α/g,'\\alpha').replace(/β/g,'\\beta').replace(/γ/g,'\\gamma')
     .replace(/θ/g,'\\theta').replace(/λ/g,'\\lambda').replace(/μ/g,'\\mu')
     .replace(/σ/g,'\\sigma').replace(/φ/g,'\\phi').replace(/ω/g,'\\omega')
-    .replace(/\*/g, '\\cdot ')
+    .replace(/\*/g, '\\times ')
     .replace(/([a-zA-Z])\/([a-zA-Z0-9]+)/g, '\\frac{$1}{$2}')
     .replace(/(\d+)\/(\d+)/g, '\\frac{$1}{$2}');
 }
