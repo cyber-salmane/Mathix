@@ -365,7 +365,12 @@ math-field{
   --selection-color:var(--text);
   --selection-background-color:rgba(124,93,249,.35);
   --selection-background-color-focused:rgba(124,93,249,.42);
-  --contains-highlight-color:rgba(124,93,249,.10);
+  /* (The actual MathLive token for the .ML__contains-highlight overlay
+     background — `--contains-highlight-background-color` — is set on the
+     theme-scoped block further down so it only neutralizes the overlay in
+     dark themes, preserving MathLive's intended faint-tint look in light
+     mode. Our previous `--contains-highlight-color` variable name was wrong
+     and MathLive never read it.) */
   /* Placeholders (the ▢ inside fractions/roots/exponents) */
   --placeholder-color:var(--text3);
   --placeholder-opacity:.55;
@@ -448,37 +453,15 @@ math-field.mf-compact{
 /* Math text color inherits from math-field (already set on the outer element)
    so we do NOT need a universal `math-field * { color: ... }` rule. */
 
-/* Universal-descendant transparent override on math-field internals. The
-   white blocks visible inside fractions / √ / sin / cos / tan / log /
-   nested structures come from MathLive's bundled CSS painting a light
-   background on internal spans that aren't all under the `[class*="ML__"]`
-   prefix we used previously (some have no class, inline `style="..."`, or
-   different naming conventions across MathLive versions). A universal
-   descendant background reset catches every layer.
-   IMPORTANT — this affects background-color and background-image ONLY. It
-   does NOT touch font-size, line-height, display, position, transform, or
-   any typography-critical property (those caused the rendering regression
-   documented at line 419 — read that comment before changing this rule).
-   Specificity: `math-field *` = (0,0,1). The targeted purple highlight
-   rules below — `math-field .ML__placeholder--selected` etc. — have
-   specificity (0,1,1) and ALWAYS win over this rule regardless of source
-   order, so the intentional purple structural tints stay intact. */
-math-field *{background-color:transparent !important;background-image:none !important;box-shadow:none !important}
-/* Pseudo-elements MathLive may use for caret / decorative overlays. The
-   universal `*` selector above does NOT match `::before` / `::after`, so
-   they need an explicit rule. Background-only; no positional or sizing
-   properties touched. */
-math-field *::before,math-field *::after{background-color:transparent !important;background-image:none !important;box-shadow:none !important}
 /* Internal MathLive control elements that don't carry an ML__ class. The
    library uses an invisible `<textarea>` (the "keyboard sink") to receive
    key events; some versions render it with a default white background that
-   becomes visible if the offscreen positioning gets disrupted. Forcing it
+   would be visible if the offscreen positioning gets disrupted. Forcing it
    fully transparent here is harmless — its visibility was never wanted. */
-math-field textarea,math-field input,math-field canvas,math-field svg{background-color:transparent !important;background-image:none !important}
-/* Additional exposed parts. We already hide the virtual-keyboard-toggle
-   and menu-toggle; force-transparent the content/container parts so any
-   light default ships from MathLive's bundled CSS is overridden. */
-math-field::part(content),math-field::part(container){background-color:transparent !important;background-image:none !important}
+math-field textarea,math-field input{background-color:transparent !important}
+/* Exposed parts. Hide-or-transparent for the outer wrappers MathLive
+   surfaces via ::part(). Background-only — no typography overrides. */
+math-field::part(content),math-field::part(container){background-color:transparent !important}
 /* Placeholder character (the ▢ inside an empty slot of \frac{} / \sqrt{} / ^{}). */
 .ML__placeholder,
 math-field .ML__placeholder,
@@ -519,13 +502,22 @@ math-field .ML__selection{
   background:rgba(124,93,249,.35) !important;
   color:var(--text) !important;
 }
-/* "Contains highlight" — the soft wash on the structure containing the caret. */
-.ML__contains-highlight,
-.ML__contains-highlight-strong,
-math-field .ML__contains-highlight,
-math-field .ML__contains-highlight-strong{
-  background:rgba(124,93,249,.08) !important;
-  color:inherit !important;
+/* "Contains highlight" — MathLive's .ML__contains-highlight overlay indicates
+   the structure containing the caret. Its bundled CSS paints it with a
+   light-theme default (#EDF2F7) which renders as a visible white/gray block
+   over typed math in dark modes (visible inside cos/sin/sqrt/fractions/log).
+   The MathLive-canonical fix is to override the CSS custom property the
+   library uses — confirmed via the bundled JS: `--contains-highlight-
+   background-color`. Scoping the variable to our dark themes means MathLive's
+   own rendering picks up `transparent` directly, with no cascade fight,
+   no specificity override, and no inline-style observer needed. The
+   .ML__contains-highlight element itself stays in the DOM (preserving
+   caret-container semantics) — only its background goes transparent.
+   Light theme is intentionally untouched: MathLive's default appearance
+   remains, where the faint blue blends naturally with the page. */
+[data-theme="dark"]     math-field,
+[data-theme="midnight"] math-field{
+  --contains-highlight-background-color:transparent;
 }
 /* Smart-fence guide marks (the faint guide-rails when auto-paired parens) */
 .ML__smart-fence-close,
@@ -1252,6 +1244,12 @@ header{
 .quiz-feedback{margin-top:14px;padding:12px 16px;border-radius:10px;font-size:14px;font-weight:500;line-height:1.6}
 .quiz-feedback.correct{background:rgba(16,185,129,.12);border:1px solid rgba(16,185,129,.3);color:var(--green2)}
 .quiz-feedback.wrong{background:rgba(248,113,113,.1);border:1px solid rgba(248,113,113,.25);color:#fca5a5}
+/* Correct, but the user's form is reducible (e.g. typed 4/8 when 1/2 was
+   expected). Answer IS accepted (still graded correct), but the feedback
+   box is amber/yellow with a "try simplifying" suggestion so the educational
+   signal is preserved. Same shape/spacing as the other two variants — only
+   color and tone change. */
+.quiz-feedback.simplify{background:rgba(251,191,36,.10);border:1px solid rgba(251,191,36,.32);color:#fcd34d}
 .quiz-actions{display:flex;gap:8px;margin-top:14px;flex-wrap:wrap}
 .qa-btn{padding:10px 18px;border-radius:10px;cursor:pointer;font-family:var(--sans);font-size:13px;font-weight:600;transition:all .15s;border:1px solid}
 .qa-steps{background:rgba(34,211,238,.1);color:var(--cyan);border-color:rgba(34,211,238,.3)}
@@ -8110,6 +8108,15 @@ function latexToText(latex) {
   for (let pass = 0; pass < 12; pass++) {
     const before = s;
     s = s
+      // MIXED NUMBERS: an integer immediately followed by a \frac is the
+      // standard `a + b/c` convention. Catch it BEFORE the regular \frac
+      // rule so the integer doesn't end up multiplicatively glued (i.e.
+      // `2\frac{2}{3}` must become `(2+(2)/(3))` = 8/3, NOT `2(2)/(3)` =
+      // 2*2/3 = 4/3 which is what the previous code produced). Tolerates the
+      // common LaTeX spacing macros (\,/\;/\:/\!/\quad/\qquad) and literal
+      // whitespace between the integer and the \frac, since MathLive
+      // serializes mixed-number input as `2\,\frac{2}{3}` in some cases.
+      .replace(/(-?\d+)\s*(?:\\(?:,|;|:|!|quad|qquad))?\s*\\[dtc]?frac\s*\{([^{}]*)\}\s*\{([^{}]*)\}/g, '($1+($2)/($3))')
       // \frac and its display-style variants. MathLive's smart-mode sometimes
       // produces \dfrac for "displaystyle" fractions in larger expressions.
       // Without these variants, the fraction wouldn't be normalized and the
@@ -8593,6 +8600,61 @@ function syncMathField(originalInput) {
 }
 // Back-compat alias for any caller that used the previous refresh name.
 function refreshMathInput(el) { syncMathField(el); }
+
+/* OPPOSITE direction: force the math-field's LaTeX → mirror.value
+   synchronously. The math-field's input listener debounces `pushToMirror`
+   via requestAnimationFrame (for typing-perf), so the mirror can lag the
+   visible math-field by one frame. That's fine for most consumers, but it
+   created a RACE at commit time: a user typing `2/2` and IMMEDIATELY
+   clicking the Practice "Check" button could read a stale `inp.value`
+   (still empty / partial), and validation would compare an incomplete
+   expression against the correct expected answer — marking obviously-
+   right answers WRONG non-deterministically.
+   Note: the math-field's keydown handler ALREADY calls the equivalent of
+   this sync synchronously before dispatching the synthetic Enter event,
+   so pressing Enter never had the race. Only the click-the-button path
+   needed this flush.
+   Pure read-then-write on inp.value; does NOT dispatch a synthetic
+   input event (consumers calling this are about to read inp.value
+   directly, so dispatching would just trigger redundant work). */
+// ─── PRACTICE PIPELINE INSTRUMENTATION ───────────────────────────────────
+// Temporary diagnostic logging gated by a single flag. When `true`, every
+// stage of the practice answer pipeline emits a structured console.group
+// showing the runtime values flowing through it (raw LaTeX, mirror value,
+// normalized strings, parsed numerics, verdict). Set to `false` once the
+// fraction-divergence bug is identified and fixed. NO functional behavior
+// changes — these are pure read-only logs.
+const PRACTICE_DEBUG = true;
+function _pdLog(label, data) {
+  if (!PRACTICE_DEBUG) return;
+  try { console.log('[Practice]', label, data); } catch(_) {}
+}
+
+function flushMathFieldToMirror(originalInput) {
+  if (!originalInput || !originalInput._mfElement) {
+    _pdLog('flushMathFieldToMirror SKIPPED', {
+      hasInput: !!originalInput,
+      hasMfElement: !!(originalInput && originalInput._mfElement),
+      currentMirrorValue: originalInput ? originalInput.value : null,
+    });
+    return;
+  }
+  try {
+    const latex = originalInput._mfElement.value || '';
+    const text = latexToText(latex);
+    const prevMirror = originalInput.value;
+    if (originalInput.value !== text) originalInput.value = text;
+    _pdLog('flushMathFieldToMirror', {
+      'mf.value (raw LaTeX)': latex,
+      'latexToText output': text,
+      'mirror BEFORE': prevMirror,
+      'mirror AFTER': originalInput.value,
+      'changed': prevMirror !== originalInput.value,
+    });
+  } catch(e) {
+    _pdLog('flushMathFieldToMirror ERROR', { error: String(e), mirror: originalInput.value });
+  }
+}
 
 /* ─── End of math input system. Legacy overlay/popover code purged. ─── */
 /* The legacy overlay/popover system has been fully removed. The only
@@ -12635,15 +12697,55 @@ function loadQuestion() {
 function checkAnswer() {
   const inp = document.getElementById('quiz-input');
   if (!inp || inp.disabled) return; // already answered — guard against double-click
+  if (PRACTICE_DEBUG) { try { console.group('[Practice] checkAnswer'); } catch(_) {} }
+  _pdLog('ENTRY — pre-flush state', {
+    'inp.value (mirror, pre-flush)': inp.value,
+    'inp._mfElement.value (math-field LaTeX, pre-flush)': inp._mfElement ? inp._mfElement.value : '(no _mfElement)',
+    'practiceIdx': practiceIdx,
+  });
+  // Force-flush the math-field's latest LaTeX into the mirror BEFORE reading.
+  // Without this, clicking Check immediately after typing the final character
+  // could read a one-frame-stale value (rAF-debounced sync), causing correct
+  // answers like `2/2`, `5/8` to be non-deterministically marked WRONG. This
+  // single call is the practice-side commit barrier — same role the Enter
+  // keydown handler plays for the keyboard-commit path.
+  try { flushMathFieldToMirror(inp); } catch(_) {}
   const userAns = inp.value.trim();
-  if (!userAns) { toast(t('toast.typeAnswer'), { variant: 'warn' }); return; }
+  if (!userAns) {
+    _pdLog('EMPTY ANSWER — bailing out', {});
+    if (PRACTICE_DEBUG) { try { console.groupEnd(); } catch(_) {} }
+    toast(t('toast.typeAnswer'), { variant: 'warn' });
+    return;
+  }
 
   const q = practiceSession[practiceIdx];
-  if (!q) return;
-  const correct = isCorrect(userAns, q.answer);
+  if (!q) {
+    _pdLog('NO QUESTION — bailing out', { practiceIdx });
+    if (PRACTICE_DEBUG) { try { console.groupEnd(); } catch(_) {} }
+    return;
+  }
+  _pdLog('post-flush — values about to be graded', {
+    'userAns (mirror after flush, trimmed)': userAns,
+    'q.answer (RAW from AI/fallback)': q.answer,
+    'q.answer typeof': typeof q.answer,
+    'q.answer JSON.stringify': JSON.stringify(q.answer),
+    'q.hint': q.hint,
+  });
+
+  // ─── SINGLE SOURCE OF TRUTH ─────────────────────────────────────────────
+  // One call grades the answer end-to-end. Every UI mutation below — input
+  // border class, feedback box variant + message, stats increments, hint
+  // visibility — is derived deterministically from this verdict. There is
+  // no second validation call anywhere in this function, so the boolean
+  // "is this correct?" and the visual "what tone does the user see?"
+  // CANNOT disagree.
+  const grade = gradeAnswer(userAns, q.answer);
+  const isPass = (grade.verdict !== 'wrong');
+  _pdLog('FINAL VERDICT', { verdict: grade.verdict, suggestion: grade.suggestion, isPass });
+  if (PRACTICE_DEBUG) { try { console.groupEnd(); } catch(_) {} }
 
   inp.classList.remove('correct','wrong');
-  inp.classList.add(correct ? 'correct' : 'wrong');
+  inp.classList.add(isPass ? 'correct' : 'wrong');
   inp.disabled = true;
   const checkBtn2 = document.querySelector('.quiz-check-btn');
   if (checkBtn2) checkBtn2.disabled = true;
@@ -12651,34 +12753,34 @@ function checkAnswer() {
   const fb = document.getElementById('quiz-feedback');
   fb.style.display = 'block';
 
-  if (correct) {
+  if (grade.verdict === 'correct') {
     fb.className = 'quiz-feedback correct';
     const msgs = [t('practice.fb.correct1'), t('practice.fb.correct2'), t('practice.fb.correct3'), t('practice.fb.correct4'), t('practice.fb.correct5')];
     fb.textContent = msgs[Math.floor(Math.random()*msgs.length)];
+  } else if (grade.verdict === 'simplify') {
+    fb.className = 'quiz-feedback simplify';
+    fb.innerHTML = `✓ Correct — but try simplifying. Equivalent form: <strong data-math="${escapeHtml(grade.suggestion)}"></strong>`;
+    renderAllMathIn(fb);
+  } else {
+    // verdict === 'wrong'. Hint is shown ONLY in this branch (never on a
+    // passing answer), so there is no path on which a hint can appear next
+    // to a correct verdict. Hint text is run through prettyMath() so math
+    // segments render as Unicode while prose stays readable.
+    fb.className = 'quiz-feedback wrong';
+    const hintPretty = q.hint ? prettyMath(q.hint) : '';
+    fb.innerHTML = `${escapeHtml(t('practice.fb.wrong'))} <strong class="qa-expected" data-math="${escapeHtml(q.answer)}" style="color:var(--text)"></strong>${q.hint ? `<br><span style="opacity:.8;font-size:13px">${escapeHtml(t('practice.fb.hint'))} ${escapeHtml(hintPretty)}</span>` : ''}`;
+    renderAllMathIn(fb);
+  }
+
+  // Stats: ANY pass verdict (correct or simplify) counts as a correct
+  // attempt for streak/stat purposes. The pedagogical "yellow" tone is a
+  // soft signal, not a partial-credit grade.
+  if (isPass) {
     practiceStats.correct++;
     practiceStats.streak++;
     if (practiceStats.streak > practiceStats.best) practiceStats.best = practiceStats.streak;
     practiceSessionCorrect++;
-    // Non-blocking simplification suggestion. If the user answered with a
-    // reducible fraction like `2/4`, the answer is still marked correct, but
-    // we surface the simplified form as a soft hint so the educational signal
-    // isn't lost. Never shown when their form already matches the simplest
-    // representation or when the answer isn't a pure single-fraction form.
-    try {
-      const suggestion = _suggestSimplifiedFraction(userAns);
-      if (suggestion) toast('Equivalent form: ' + suggestion, { variant: 'warn', duration: 4000 });
-    } catch(_) {}
   } else {
-    fb.className = 'quiz-feedback wrong';
-    // Expected answer: KaTeX render (it's pure math — fractions, exponents,
-    // radicals all need real notation).
-    // Hint: KaTeX would mangle prose like "Find common denominator first" by
-    // treating words as variables. Use prettyMath() instead — it converts
-    // math-y substrings to Unicode (pi → π, x^2 → x², 1/2 → ½) while leaving
-    // English prose untouched.
-    const hintPretty = q.hint ? prettyMath(q.hint) : '';
-    fb.innerHTML = `${escapeHtml(t('practice.fb.wrong'))} <strong class="qa-expected" data-math="${escapeHtml(q.answer)}" style="color:var(--text)"></strong>${q.hint ? `<br><span style="opacity:.8;font-size:13px">${escapeHtml(t('practice.fb.hint'))} ${escapeHtml(hintPretty)}</span>` : ''}`;
-    renderAllMathIn(fb);
     practiceStats.streak = 0;
   }
 
@@ -12696,7 +12798,14 @@ function checkAnswer() {
 // sampling catches things like "x^2+2x+1" ≡ "(x+1)^2" that text comparison misses.
 function _normAns(s) {
   // Preserve structure: keep parens, but normalize alternate symbols / whitespace.
-  return String(s == null ? '' : s)
+  let text = String(s == null ? '' : s);
+  // MIXED NUMBERS BEFORE whitespace strip: `2 2/3` is "2 + 2/3", not
+  // concatenated digits. Whitespace is the only disambiguator between
+  // mixed notation and a typo — once we strip it via the next .replace,
+  // `2 2/3` becomes `22/3` (= 7.333) which is mathematically wrong.
+  // Convert here so math.js sees the correct grouping.
+  text = text.replace(/(-?\d+)\s+(\d+)\s*\/\s*(\d+)/g, '($1+$2/$3)');
+  return text
     .replace(/\s+/g,'')
     .toLowerCase()
     .replace(/×|·/g, '*')
@@ -12784,12 +12893,26 @@ function _extractNumericValues(s) {
   const out = [];
   if (!s) return out;
   const text = String(s);
-  // Whole-string evaluation first (after normalization).
+  // Whole-string evaluation first (after _normAns handles mixed numbers,
+  // alternate symbols, etc.). If this succeeds, it is the canonical numeric
+  // value of the expected answer and the ONLY thing we should accept — sub-
+  // extracting fractions / bare numbers here would mistakenly accept `2/3`
+  // for an expected of `2 2/3`, since `2/3` is a literal substring of the
+  // expected even though they're different values.
+  let wholeOk = false;
   try {
     const v = math.evaluate(_normAns(text));
     const n = _toFiniteNumber(v);
-    if (n != null) out.push(n);
+    if (n != null) {
+      out.push(n);
+      wholeOk = true;
+    }
   } catch(_) {}
+  if (wholeOk) return out;
+
+  // Whole-eval failed (e.g. expected is `"5/8 or 0.625"` — `or` is not a
+  // math.js operator). Fall through to per-form sub-extraction so we still
+  // accept any of the listed alternatives.
   // Fractions like "3/4", "-3/4", "1/2".
   const fracRe = /(-?\d+(?:\.\d+)?)\s*\/\s*(-?\d+(?:\.\d+)?)/g;
   let m;
@@ -12803,13 +12926,58 @@ function _extractNumericValues(s) {
     const n = parseFloat(m[1]);
     if (n >= 0 && isFinite(Math.sqrt(n))) out.push(Math.sqrt(n));
   }
-  // Bare numerics.
-  const numRe = /-?\d+(?:\.\d+)?(?!\s*\/)/g;
+  // Bare numerics. Lookbehind keeps us from harvesting denominators of
+  // already-matched fractions ("4" inside "3/4"); lookahead keeps us from
+  // harvesting numerators. Combined: only standalone numbers escape.
+  const numRe = /(?<![\/\d.])-?\d+(?:\.\d+)?(?!\s*\/)/g;
   while ((m = numRe.exec(text)) !== null) {
     const n = parseFloat(m[0]);
     if (isFinite(n)) out.push(n);
   }
   return out;
+}
+
+// Return the number of decimal digits if the source string contains a finite
+// decimal literal, else null. Used to scale the comparison tolerance: when
+// expected is "0.33", the user's `1/3 = 0.3333...` should be accepted because
+// at 2-decimal precision both round to 0.33. Picks the GREATEST precision
+// among any decimal substrings so the most informative one wins.
+function _detectPrecisionFromString(s) {
+  const matches = String(s == null ? '' : s).match(/-?\d+\.(\d+)/g);
+  if (!matches) return null;
+  let maxDec = 0;
+  for (const m of matches) {
+    const d = m.split('.')[1].length;
+    if (d > maxDec) maxDec = d;
+  }
+  return maxDec > 0 ? maxDec : null;
+}
+
+// Three-tier equivalence check. The single comparison primitive used by
+// isCorrect. Returns true if the user's numeric value should be accepted
+// against the expected, given the original expected string for precision
+// detection.
+//   Tier 1 — Tight equality (floating-point noise on canonical matches)
+//   Tier 2 — Precision-aware rounding (handles `1/3` vs `0.33` etc.)
+//   Tier 3 — Generous absolute tolerance (safety net for tolerable
+//            rounding like `2.67` vs `2 2/3 = 2.6667`)
+function _numericMatch(u, e, expectedSourceStr) {
+  if (!isFinite(u) || !isFinite(e)) return false;
+  const mag = Math.max(1, Math.abs(u), Math.abs(e));
+  // Tight equality: 1e-6 relative tolerance handles ordinary floating-point
+  // noise (e.g. math.js round-trip via different parse paths producing
+  // `1.2499999999999998` instead of `1.25`). 1e-9 was too strict for some
+  // chained-computation cases.
+  if (Math.abs(u - e) <= 1e-6 * mag) return true;
+  const decimals = _detectPrecisionFromString(expectedSourceStr);
+  if (decimals != null && decimals >= 1) {
+    const f = Math.pow(10, decimals);
+    if (Math.round(u * f) === Math.round(e * f)) return true;
+  }
+  // Generous absolute safety net for tolerable approximations like
+  // `2.67` vs `2 2/3 = 2.6667`.
+  if (Math.abs(u - e) <= 0.005) return true;
+  return false;
 }
 function _trySymbolicMatch(u, eNorm) {
   if (u === eNorm) return true;
@@ -12834,35 +13002,201 @@ function _trySymbolicMatch(u, eNorm) {
   } catch(_) {}
   return false;
 }
+// Unwrap any LaTeX into plain math.js-parseable text. Applied to BOTH sides
+// of the comparison at the validator's entry: AI-generated practice answers
+// ship in raw LaTeX form (`\frac{1}{4}`, `\sqrt{2}`, `\pi/2`) and a defensive
+// re-pipe on user input handles the edge case of pasted LaTeX or any code
+// path where the math-field mirror hasn't already normalized for us. The
+// function is conservative — only re-pipes when a backslash is present, and
+// falls back to the original string on any error.
+function _unwrapLatex(s) {
+  let text = String(s == null ? '' : s);
+  if (text.indexOf('\\') >= 0) {
+    try { text = latexToText(text) || text; } catch(_) {}
+  }
+  return text;
+}
+// Pure-JS, math.js-independent numeric parser. Accepts the common forms
+// students and AIs both produce:
+//   - plain integers ("5", "-3")
+//   - decimals ("0.75", "-1.250", ".5")
+//   - simple fractions ("3/4", "-3/4", "(3)/(4)")
+//   - mixed numbers ("2 1/2", "2 1/2", "-2 1/2")
+//   - LaTeX wrappers (\frac, \sqrt, mathrm) via latexToText first
+// Returns the finite numeric value or null. NEVER throws. Used as a
+// defensive fallback when math.evaluate fails to produce a number — gives
+// us a deterministic second-opinion on what the input is worth.
+function _parseFractionish(s) {
+  if (s == null) return null;
+  let text = String(s).trim();
+  if (!text) return null;
+  // LaTeX-unwrap first so `\frac{5}{4}` reaches us as `(5)/(4)`.
+  if (text.indexOf('\\') >= 0) {
+    try { text = latexToText(text) || text; } catch(_) {}
+  }
+  // Quick normalization: strip whitespace + invisible Unicode, normalize the
+  // common alternate symbols (×→*, ÷→/, ⁄→/, −→-, etc.). NOT a substitute for
+  // _normAns — this is a deliberately limited parser, not a general one.
+  text = text
+    .replace(/[ ​‌‍]/g, '')   // various invisible spaces
+    .replace(/[×·]/g, '*')
+    .replace(/[÷⁄]/g, '/')
+    .replace(/[−–—]/g, '-');
+  // Try mixed number: "2 1/2" → 2.5
+  let m = text.match(/^\s*(-?\d+)\s+(\d+)\s*\/\s*(\d+)\s*$/);
+  if (m) {
+    const w = parseInt(m[1], 10);
+    const n = parseInt(m[2], 10);
+    const d = parseInt(m[3], 10);
+    if (d !== 0 && isFinite(w) && isFinite(n) && isFinite(d)) {
+      return (w < 0 ? -1 : 1) * (Math.abs(w) + n / d);
+    }
+  }
+  // Strip whitespace and parens for simple fraction / number parsing
+  const compact = text.replace(/\s+/g, '').replace(/[()]/g, '');
+  // Try simple fraction: "3/4", "-3/4"
+  m = compact.match(/^(-?\d+(?:\.\d+)?)\/(-?\d+(?:\.\d+)?)$/);
+  if (m) {
+    const a = parseFloat(m[1]), b = parseFloat(m[2]);
+    if (b !== 0 && isFinite(a) && isFinite(b)) return a / b;
+  }
+  // Try plain number: "5", "0.75", "-1.250", ".5"
+  if (/^-?\d*\.?\d+$/.test(compact)) {
+    const n = parseFloat(compact);
+    if (isFinite(n)) return n;
+  }
+  return null;
+}
+// Kept for backwards compatibility with any external caller; new code should
+// use `_unwrapLatex` directly.
+function _normalizeExpected(s) { return _unwrapLatex(s); }
 function isCorrect(user, expected) {
-  if (user == null || expected == null) return false;
-  const u = _normAns(user);
-  if (!u) return false;
+  _pdLog('isCorrect ENTRY', { 'user (raw)': user, 'expected (raw)': expected });
+  if (user == null || expected == null) {
+    _pdLog('isCorrect → false (null input)', {});
+    return false;
+  }
+  const userUnwrap = _unwrapLatex(user);
+  const u = _normAns(userUnwrap);
+  _pdLog('isCorrect normalization', {
+    'user raw': user,
+    '_unwrapLatex(user)': userUnwrap,
+    '_normAns(_unwrapLatex(user))  [= u]': u,
+  });
+  if (!u) {
+    _pdLog('isCorrect → false (empty u)', {});
+    return false;
+  }
+  const expectedNorm = _unwrapLatex(expected);
+  _pdLog('isCorrect expected side', {
+    'expected raw': expected,
+    '_unwrapLatex(expected)  [= expectedNorm]': expectedNorm,
+  });
+
+  // ── Trivial-equivalence fast path ───────────────────────────────────────
+  const _stripParens = (s) => String(s).replace(/[()]/g, '');
+  const eSimple = _normAns(expectedNorm);
+  const uStripped = _stripParens(u);
+  const eStripped = _stripParens(eSimple);
+  _pdLog('isCorrect Path 1 — trivial equivalence', {
+    eSimple,
+    '_stripParens(u)': uStripped,
+    '_stripParens(eSimple)': eStripped,
+    'will match?': eSimple && uStripped === eStripped,
+  });
+  if (eSimple && uStripped === eStripped) {
+    _pdLog('isCorrect → true (TRIVIAL FAST PATH)', {});
+    return true;
+  }
 
   // ── Numeric equivalence (the primary path) ──────────────────────────────
-  // Compute the user's numeric value once, then compare against every
-  // numeric value extracted from the expected string. This is what makes
-  // "3/4" equal "0.75", "2/4" equal "1/2", "√4" equal "2", "sin(pi/2)"
-  // equal "1", and tolerates AI wrappers like "0.75 (or 3/4)".
   let userNum = null;
+  let userNumSource = 'none';
   try {
     const v = math.evaluate(u);
     userNum = _toFiniteNumber(v);
-  } catch(_) {}
+    if (userNum != null) userNumSource = 'math.evaluate';
+    _pdLog('isCorrect Path 2 — math.evaluate(u)', {
+      'math.evaluate raw result': v,
+      'typeof raw result': typeof v,
+      '_toFiniteNumber(v)  [= userNum]': userNum,
+    });
+  } catch(e) {
+    _pdLog('isCorrect Path 2 — math.evaluate(u) THREW', { error: String(e) });
+  }
+  if (userNum == null) {
+    try {
+      userNum = _parseFractionish(user);
+      if (userNum != null) userNumSource = '_parseFractionish';
+      _pdLog('isCorrect Path 2 fallback — _parseFractionish(user)', { 'userNum (fallback)': userNum });
+    } catch(_) {}
+  }
   if (userNum != null) {
-    const expectedNums = _extractNumericValues(expected);
+    const expectedNums = _extractNumericValues(expectedNorm);
+    _pdLog('isCorrect _extractNumericValues(expectedNorm)', { expectedNums });
+    try {
+      const eFallback = _parseFractionish(expected);
+      if (eFallback != null && !expectedNums.some(v => Math.abs(v - eFallback) < 1e-9)) {
+        expectedNums.push(eFallback);
+        _pdLog('isCorrect added _parseFractionish(expected) to candidates', { eFallback, expectedNums });
+      }
+    } catch(_) {}
     for (const en of expectedNums) {
-      if (_numericEqual(userNum, en)) return true;
+      const matched = _numericMatch(userNum, en, expectedNorm);
+      _pdLog('isCorrect _numericMatch attempt', {
+        userNum, en, expectedNorm, userNumSource,
+        diff: Math.abs(userNum - en),
+        matched,
+      });
+      if (matched) {
+        _pdLog('isCorrect → true (NUMERIC MATCH)', { userNum, en });
+        return true;
+      }
     }
+  } else {
+    _pdLog('isCorrect Path 2 → userNum is null (skipping numeric path)', {});
   }
 
-  // ── Symbolic equivalence (free-variable expressions, exact strings) ─────
-  for (const cand of _answerCandidates(expected)) {
+  // ── Symbolic equivalence ────────────────────────────────────────────────
+  const candidates = _answerCandidates(expectedNorm);
+  _pdLog('isCorrect Path 3 — symbolic candidates', { candidates });
+  for (const cand of candidates) {
     const eNorm = _normAns(cand);
     if (!eNorm) continue;
-    if (_trySymbolicMatch(u, eNorm)) return true;
+    if (_trySymbolicMatch(u, eNorm)) {
+      _pdLog('isCorrect → true (SYMBOLIC MATCH)', { cand, eNorm });
+      return true;
+    }
   }
+  _pdLog('isCorrect → false (no path matched)', { u, expectedNorm });
   return false;
+}
+
+// ─── SINGLE SOURCE OF TRUTH FOR PRACTICE GRADING ──────────────────────────
+// One call → one result. The UI (input border, feedback box variant, stats,
+// hint visibility) is fully derived from the verdict returned here, so no
+// two checks can ever disagree. The verdict is exhaustively one of:
+//   'wrong'    — user answer is NOT mathematically equivalent to expected
+//   'correct'  — equivalent AND already in simplest form (or non-fraction)
+//   'simplify' — equivalent, but user typed a reducible fraction (e.g. 4/8)
+// `suggestion` is only meaningful when verdict === 'simplify'.
+// Pure function: no side effects, no DOM access. Deterministic — given the
+// same (user, expected) pair, always returns the same result.
+function gradeAnswer(userText, expectedText) {
+  _pdLog('gradeAnswer ENTRY', { userText, expectedText });
+  if (!isCorrect(userText, expectedText)) {
+    _pdLog('gradeAnswer → wrong', {});
+    return { verdict: 'wrong', suggestion: null };
+  }
+  let suggestion = null;
+  try { suggestion = _suggestSimplifiedFraction(userText); } catch(_) {}
+  _pdLog('gradeAnswer simplification probe', { suggestion });
+  if (suggestion) {
+    _pdLog('gradeAnswer → simplify', { suggestion });
+    return { verdict: 'simplify', suggestion };
+  }
+  _pdLog('gradeAnswer → correct', {});
+  return { verdict: 'correct', suggestion: null };
 }
 
 async function showPracticeSteps() {
