@@ -1232,13 +1232,30 @@ header{
 .quiz-counter{font-size:12px;color:var(--text3);font-weight:600;letter-spacing:.05em;margin-bottom:14px;text-align:center;font-family:var(--mono)}
 .quiz-card{background:var(--s1);border:1px solid var(--border);border-radius:var(--r3);padding:24px;margin-bottom:12px}
 .quiz-topic-tag{display:inline-block;font-size:10px;font-weight:700;padding:3px 10px;border-radius:20px;background:rgba(124,93,249,.15);color:var(--accent2);border:1px solid rgba(124,93,249,.3);margin-bottom:14px;letter-spacing:.05em;text-transform:uppercase}
+/* Small inline hint next to the topic tag, shown only when the question has
+   more than one acceptable answer (quadratic with two roots, multi-form
+   accepted answers, etc.). Subdued tone — doesn't compete with the topic
+   pill. Hidden by default; loadQuestion toggles display per question. */
+.quiz-multi-hint{display:inline-block;margin-left:8px;font-size:10px;font-weight:600;padding:3px 9px;border-radius:20px;background:rgba(251,191,36,.10);color:#fcd34d;border:1px solid rgba(251,191,36,.28);letter-spacing:.03em;text-transform:none;vertical-align:middle}
 .quiz-question{font-family:var(--mono);font-size:clamp(16px,3vw,24px);color:var(--text);line-height:1.5;margin-bottom:20px;font-weight:500}
-.quiz-input-row{display:flex;gap:8px}
+.quiz-input-row{display:flex;gap:8px;align-items:stretch}
+/* Multi-slot stack: vertical stacking of one or two answer inputs with an
+   "or" separator between them. The stack takes the flex:1 slot of the row,
+   pushing the Check button to the right. When slot 2 is hidden, the stack
+   collapses to a single input visually identical to the previous layout. */
+.quiz-input-stack{flex:1;display:flex;flex-direction:column;gap:6px;min-width:0}
+.quiz-input-stack .quiz-input{width:100%}
+.quiz-input-stack .mf-wrap{width:100%}
+.quiz-slot-sep{font-size:10px;font-weight:700;color:var(--text3);letter-spacing:.18em;text-transform:uppercase;padding:2px 0;text-align:center}
 .quiz-input{flex:1;background:var(--s2);border:1px solid var(--border2);border-radius:12px;color:var(--text);font-family:var(--mono);font-size:18px;padding:12px 16px;outline:none;transition:border-color .2s}
 .quiz-input:focus{border-color:var(--accent)}
 .quiz-input::placeholder{color:var(--text3);font-size:14px}
 .quiz-input.correct{border-color:var(--green2);background:rgba(16,185,129,.08)}
 .quiz-input.wrong{border-color:var(--red);background:rgba(248,113,113,.08)}
+/* Per-slot border for the multi-slot "simplify" case (e.g. user typed 2/4
+   in one slot when the expected was 1/2). Visually distinct from green
+   correct so users can see which slot needs simplification. */
+.quiz-input.simplify{border-color:rgba(251,191,36,.55);background:rgba(251,191,36,.08)}
 .quiz-check-btn{padding:12px 20px;border-radius:12px;cursor:pointer;font-family:var(--sans);font-size:14px;font-weight:700;background:linear-gradient(135deg,var(--accent),#4f2fd4);color:#fff;border:none;box-shadow:0 4px 14px rgba(124,93,249,.3);transition:all .15s;white-space:nowrap}
 .quiz-check-btn:hover{box-shadow:0 4px 20px rgba(124,93,249,.5)}
 .quiz-feedback{margin-top:14px;padding:12px 16px;border-radius:10px;font-size:14px;font-weight:500;line-height:1.6}
@@ -3291,10 +3308,15 @@ header{
 
         <div class="quiz-card" id="quiz-card">
           <div class="quiz-topic-tag" id="quiz-topic-tag">Algebra</div>
+          <span class="quiz-multi-hint" id="quiz-multi-hint" style="display:none">multiple solutions accepted — enter any one</span>
           <div class="quiz-question" id="quiz-question">Loading...</div>
 
           <div class="quiz-input-row">
-            <input class="quiz-input" id="quiz-input" data-i18n-placeholder="practice.quiz.placeholder" placeholder="Type your answer…" onkeydown="if(event.key==='Enter')checkAnswer()">
+            <div class="quiz-input-stack" id="quiz-input-stack">
+              <input class="quiz-input" id="quiz-input" data-i18n-placeholder="practice.quiz.placeholder" placeholder="Type your answer…" onkeydown="if(event.key==='Enter')checkAnswer()">
+              <div class="quiz-slot-sep" id="quiz-slot-sep" style="display:none">— or —</div>
+              <input class="quiz-input" id="quiz-input-2" placeholder="Second answer" style="display:none" onkeydown="if(event.key==='Enter')checkAnswer()">
+            </div>
             <button class="quiz-check-btn" onclick="checkAnswer()" data-i18n="practice.btn.check">Check</button>
           </div>
 
@@ -8007,9 +8029,16 @@ function textToTex(s) {
     .replace(/∏/g, '\\prod ').replace(/∂/g, '\\partial ')
     .replace(/∇/g, '\\nabla ').replace(/∮/g, '\\oint ');
 
-  // 2. Greek letters by name (whole-word) — before function-name transforms.
-  for (const g of _GREEK_TEX) out = out.replace(new RegExp('\\b' + g + '\\b', 'g'), '\\' + g + ' ');
-  for (const G of _GREEK_TEX_CAP) out = out.replace(new RegExp('\\b' + G + '\\b', 'g'), '\\' + G + ' ');
+  // 2. Greek letters by name. `\b` doesn't fire between a digit and a letter
+  //    in JS (both are \w), so `\bpi\b` would FAIL on inputs like "96pi" —
+  //    leaving the canonical "96\pi" KaTeX form unproduced and the chip
+  //    rendering as the smashed italic "96pi". Use letter-only lookarounds
+  //    instead: matches "pi" iff it isn't part of a longer letter run
+  //    ("alphabet" stays intact, "2alpha" gets converted, "96pi" gets
+  //    converted). Greek letters never appear adjacent to other letters
+  //    in legitimate math input, so this is safe.
+  for (const g of _GREEK_TEX) out = out.replace(new RegExp('(?<![a-zA-Z])' + g + '(?![a-zA-Z])', 'g'), '\\' + g + ' ');
+  for (const G of _GREEK_TEX_CAP) out = out.replace(new RegExp('(?<![a-zA-Z])' + G + '(?![a-zA-Z])', 'g'), '\\' + G + ' ');
 
   // 3. Structural functions BEFORE prefixing trig with backslashes.
   out = _replaceFnCalls(out, 'sqrt', body => '\\sqrt{' + textToTex(body) + '}');
@@ -8108,6 +8137,36 @@ function latexToText(latex) {
   for (let pass = 0; pass < 12; pass++) {
     const before = s;
     s = s
+      // SHORTHAND FRACTION EXPANSION (must run BEFORE any rule that consumes
+      // \frac). In standard LaTeX, `\frac{3}{4}` may be written as `\frac34`
+      // when both arguments are single tokens — MathLive emits this compact
+      // form by default when typing single-digit numerators/denominators.
+      // The DevTools log confirmed MathLive output `\frac34` for a typed
+      // 3/4, and our braced-frac rule (which requires `\{...\}\{...\}`)
+      // never matched, leaving the catchall to strip the backslash and
+      // produce the garbage `frac34`.
+      //
+      // A "single token" here is either:
+      //   - a single alphanumeric character: 3, 4, x, n
+      //   - a control sequence: \pi, \alpha, \theta
+      //   - an already-braced group: {anything}
+      // Wrapping unbraced single-token args in {} normalizes every form
+      // to the fully-braced shape the rest of the pipeline expects. Idempotent
+      // for already-braced input — wrapping `{x}` would leave it as `{x}`.
+      .replace(
+        /\\([dtc]?frac)\s*(\{[^{}]*\}|\\[a-zA-Z]+|[a-zA-Z0-9])\s*(\{[^{}]*\}|\\[a-zA-Z]+|[a-zA-Z0-9])/g,
+        (m, fn, a, b) => {
+          const wrap = (x) => (x.charAt(0) === '{') ? x : '{' + x + '}';
+          return '\\' + fn + wrap(a) + wrap(b);
+        }
+      )
+      // Same shorthand convention for \sqrt: `\sqrt2` = `\sqrt{2}`. Only
+      // applies when the next char is a single token (NOT `[` for nth-root
+      // index, NOT `{` since that's already braced). Single-arg form only.
+      .replace(
+        /\\sqrt(?!\s*[\[\{])\s*(\\[a-zA-Z]+|[a-zA-Z0-9])/g,
+        (m, a) => '\\sqrt{' + a + '}'
+      )
       // MIXED NUMBERS: an integer immediately followed by a \frac is the
       // standard `a + b/c` convention. Catch it BEFORE the regular \frac
       // rule so the integer doesn't end up multiplicatively glued (i.e.
@@ -8116,6 +8175,8 @@ function latexToText(latex) {
       // common LaTeX spacing macros (\,/\;/\:/\!/\quad/\qquad) and literal
       // whitespace between the integer and the \frac, since MathLive
       // serializes mixed-number input as `2\,\frac{2}{3}` in some cases.
+      // The shorthand-expander above ensures `2\frac34` reaches here as
+      // `2\frac{3}{4}`, so this single rule covers both shapes.
       .replace(/(-?\d+)\s*(?:\\(?:,|;|:|!|quad|qquad))?\s*\\[dtc]?frac\s*\{([^{}]*)\}\s*\{([^{}]*)\}/g, '($1+($2)/($3))')
       // \frac and its display-style variants. MathLive's smart-mode sometimes
       // produces \dfrac for "displaystyle" fractions in larger expressions.
@@ -8624,7 +8685,7 @@ function refreshMathInput(el) { syncMathField(el); }
 // normalized strings, parsed numerics, verdict). Set to `false` once the
 // fraction-divergence bug is identified and fixed. NO functional behavior
 // changes — these are pure read-only logs.
-const PRACTICE_DEBUG = true;
+const PRACTICE_DEBUG = false;
 function _pdLog(label, data) {
   if (!PRACTICE_DEBUG) return;
   try { console.log('[Practice]', label, data); } catch(_) {}
@@ -8680,7 +8741,15 @@ const _LEGACY_PURGE_MARKER = 1;  // sentinel for future refactors
    defensively try-wrapped so one missing element doesn't break the rest. */
 function _bootMathInputs() {
   try { setupMathField(document.getElementById('solver-input'), { multiline: true, placeholder: 'expression', quickPreset: 'standard' }); } catch(_) {}
-  try { setupMathField(document.getElementById('quiz-input'),   { placeholder: 'your answer', quickPreset: 'practice' }); } catch(_) {}
+  // Placeholders are wrapped in \text{...} so MathLive renders them in
+  // text mode with proper word-spacing. Without the wrap, "your answer"
+  // is parsed as math identifiers and renders as smashed italic
+  // "youranswer" with no spacing — the bug visible in the screenshots.
+  try { setupMathField(document.getElementById('quiz-input'),   { placeholder: '\\text{Your answer}',     quickPreset: 'practice' }); } catch(_) {}
+  // Slot 2 for multi-answer practice questions (e.g. quadratics with two
+  // real roots). Hidden by default in HTML; loadQuestion shows it when the
+  // question declares expectedAnswers.length >= 2 (or legacy "A or B" form).
+  try { setupMathField(document.getElementById('quiz-input-2'), { placeholder: '\\text{Other solution}', quickPreset: 'practice' }); } catch(_) {}
   try { setupMathField(document.getElementById('expr'),         { multiline: true, placeholder: 'expression', quickPreset: 'standard' }); } catch(_) {}
   // AI chat is conversational text — math-field would feel wrong there.
   // Keep the raw input; no editor enhancement applied.
@@ -12432,6 +12501,21 @@ setTimeout(() => { try { setQty(practiceQty); } catch(_) {} }, 0);
 let practiceSession = [];
 let practiceIdx = 0;
 let practiceSessionCorrect = 0; // per-session counter (lifetime stats live in practiceStats)
+// Set by loadQuestion when the current question expects N distinct solutions
+// AND the UI is rendering one input slot per expected (currently N === 2).
+// Read by checkAnswer to route to gradeAnswerSlots. Cannot rely on the
+// mirror element's offsetParent here because the .mf-mirror CSS rule sets
+// display:none !important on the original input — it returns null even when
+// the visible math-field wrap is rendered. This flag is the explicit
+// hand-off between loadQuestion (UI state owner) and checkAnswer (verdict
+// resolver).
+let _practiceUseMultiSlot = false;
+// Mathematically-deduped accepted-answer list for the current question.
+// Set by loadQuestion (which calls `_dedupeExpectedAnswers` on q.expectedAnswers
+// or the parsed "A or B" form) and read by checkAnswer to feed both
+// gradeAnswerSlots (multi-slot mode) and gradeAnswerSet (single-slot mode).
+// Stored separately from `q` so we don't mutate the AI-generated record.
+let _practiceAcceptedAnswers = null;
 let practiceStats = (() => {
   const dflt = {total:0, correct:0, streak:0, best:0};
   try {
@@ -12554,6 +12638,173 @@ updateStatsDisplay();
 function _normalizeQ(q) {
   return String(q || '').toLowerCase().replace(/\s+/g, ' ').replace(/[.,;:!?]+\s*$/, '').trim();
 }
+// Deterministic post-generation sanity filter for AI-produced problems. The
+// AI prompt instructs against the broken patterns below, but the model still
+// produces them occasionally — this is the guard that prevents them ever
+// reaching the user. Rejects:
+//   - missing/empty question or answer
+//   - "undefined" / "no solution" / "DNE" / "infinity" / NaN-style answers
+//   - division-by-zero in the visible question text (e.g. `1/0`, `7/(2-2)`)
+//   - obviously malformed bracketing
+// Keep this list tight — false-positives reject legitimate problems and
+// force the AI prompt to retry / fall back to the local bank.
+// Pre-process common non-LaTeX notation that AI questions may use, before
+// any KaTeX rendering pass sees them. Converts ASCII vector brackets and
+// double-pipe magnitudes into proper LaTeX so the rendered output reads as
+// real mathematical notation rather than `<3,4>` literals and `||v||` pipes.
+// Conservative — only operates on patterns that are unambiguous in math
+// context; leaves prose and existing LaTeX commands untouched.
+function _normalizeNotationForDisplay(s) {
+  if (s == null) return '';
+  let text = String(s);
+  // === LaTeX → Unicode (for prose-path rendering via prettyMath which can't
+  // interpret LaTeX). KaTeX accepts these Unicode characters too, so this
+  // also produces clean math-path rendering. ===
+  // \langle ... \rangle → ⟨ ... ⟩
+  text = text.replace(/\\langle\s*/g, '⟨').replace(/\s*\\rangle/g, '⟩');
+  // \| → ‖  (double-bar norm / magnitude delimiter)
+  text = text.replace(/\\\|/g, '‖');
+  // === ASCII → Unicode (for both rendering paths) ===
+  // ||x|| → ‖x‖  (double-pipe magnitude → Unicode double-bar norm)
+  text = text.replace(/\|\|\s*([^|]+?)\s*\|\|/g, '‖$1‖');
+  // <a,b> → ⟨a, b⟩  (vector components — only when contents contain a
+  // comma and look numeric/symbolic so we don't false-match inequalities).
+  text = text.replace(/<\s*([^<>]*,[^<>]*)\s*>/g, '⟨$1⟩');
+  return text;
+}
+
+// Practice-question display renderer. Distinguishes prose-heavy questions
+// ("10 is what percent of 20", "Find the 5th term of the arithmetic
+// sequence: 2, 5, 8, 11, ...") from pure-math questions (`x^2 - 4 = 0`,
+// `\frac{1}{2} + \frac{1}{3}`). KaTeX renders the latter beautifully but
+// strips whitespace and italicizes letters in the former (which is how
+// "10 is what percent of 20" rendered as the smashed-together
+// "10iswhatpercentof20" in the bug report). For prose, we use prettyMath()
+// which converts math-y substrings to Unicode (1/2 → ½, x^2 → x², pi → π)
+// while leaving spaces and English words intact.
+//
+// HEURISTIC: count non-math English words (≥2 letters, not in MATH_WORDS).
+// Two or more → prose path. Zero or one → math path.
+const _PRACTICE_MATH_WORDS = new Set([
+  'sin','cos','tan','sec','csc','cot','asin','acos','atan',
+  'sinh','cosh','tanh','log','ln','exp','sqrt','cbrt',
+  'pi','phi','theta','alpha','beta','gamma','delta','lambda','mu','sigma','tau','omega',
+  'x','y','z','n','f','g','h','a','b','c','d','i','j','k'
+]);
+function renderPracticeQuestion(el, text) {
+  if (!el) return;
+  const raw = String(text == null ? '' : text);
+  if (!raw.trim()) { el.innerHTML = ''; el.style.display = 'none'; return; }
+  el.style.display = '';
+  // Normalize vector / magnitude notation up front, regardless of which
+  // render path we take below.
+  const normalized = _normalizeNotationForDisplay(raw);
+  // Count prose words.
+  const words = normalized.match(/\b[a-zA-Z]{2,}\b/g) || [];
+  let proseCount = 0;
+  for (const w of words) {
+    if (!_PRACTICE_MATH_WORDS.has(w.toLowerCase())) proseCount++;
+  }
+  if (proseCount >= 1) {
+    // ANY prose word (case-insensitive English ≥2 letters not in MATH_WORDS)
+    // is enough to switch to the prose path. The previous threshold of >=2
+    // missed cases like "2² + 5² = c², find c" where the single word "find"
+    // forced the question through KaTeX, which then rendered the prose as
+    // smashed italic "findc". prettyMath preserves whitespace and English
+    // while still upgrading math segments to Unicode.
+    el.textContent = prettyMath(normalized);
+    return;
+  }
+  // Pure math: delegate to the existing KaTeX path (which already handles
+  // \frac, \sqrt, \langle/\rangle, etc.).
+  renderMathTo(el, normalized);
+}
+
+function _isValidPracticeProblem(p, topic) {
+  if (!p || typeof p.question !== 'string' || typeof p.answer !== 'string') return false;
+  const q = p.question.trim();
+  const a = p.answer.trim();
+  if (!q || !a) return false;
+  // ── DEGENERATE-QUESTION REJECTIONS ──────────────────────────────────────
+  // A question must contain some mathematical structure — an operator,
+  // variable, equation, comparison, or recognizable math keyword. A pure
+  // bare number ("25") is not a question. This catches the "Percentages
+  // category emits 25 as the question" class of broken generations.
+  if (/^-?\d+(\.\d+)?$/.test(q)) return false;
+  // Reject explicit "undefined" / "DNE" / "no solution" / "infinity" answers.
+  if (/^[\s(]*(undefined|none|no\s*solution|no\s*real\s*solution|n\/?a|impossible|infinity|infinite|\+?\s*∞|-\s*∞|dne|does\s*not\s*exist|null|nan)[\s).]*$/i.test(a)) return false;
+  // Reject `X/0` or `X÷0` literal patterns in the question text.
+  if (/\/\s*0+(?!\d)/.test(q) || /÷\s*0+(?!\d)/.test(q)) return false;
+  // Detect a denominator that's a trivially-evaluable expression equaling 0
+  // (e.g. `7/(2-2)`). Conservative: only catches the obvious cases.
+  const denomZero = q.match(/\/\s*\(([^()]+)\)/g) || [];
+  for (const m of denomZero) {
+    const inner = m.replace(/^\/\s*\(/, '').replace(/\)$/, '');
+    try {
+      const v = math.evaluate(inner);
+      if (typeof v === 'number' && v === 0) return false;
+    } catch(_) { /* not a clean numeric — skip */ }
+  }
+  // Reject visibly malformed bracketing (more opens than closes or vice versa).
+  const opens = (q.match(/[({\[]/g) || []).length;
+  const closes = (q.match(/[)}\]]/g) || []).length;
+  if (opens !== closes) return false;
+  // ── TOPIC-SPECIFIC SEMANTIC CHECKS ──────────────────────────────────────
+  // Each category has a minimum semantic structure its questions must satisfy.
+  // These guard against the AI generating off-topic or context-less content
+  // that passes the generic checks but is educationally broken.
+  if (topic === 'percentages') {
+    // Percentages questions must contain a percent token (% symbol or the
+    // word "percent"). Without one, the question is just arithmetic at best.
+    if (!/%|\bpercent\b/i.test(q)) return false;
+  }
+  if (topic === 'vectors') {
+    // Vectors questions should contain vector notation OR a vector-operation
+    // keyword (magnitude, dot, cross). Without one, the question is scalar
+    // arithmetic and doesn't belong in this category.
+    if (!/\\langle|⟨|<\s*-?\d/.test(q) && !/\b(magnitude|norm|dot|cross|vector|component)\b/i.test(q)) return false;
+  }
+  if (topic === 'systems-of-equations') {
+    // A system needs at least two equations — look for two '=' signs or a
+    // comma/newline-separated pair of equations.
+    const eqCount = (q.match(/=/g) || []).length;
+    if (eqCount < 2) return false;
+  }
+  if (topic === 'sequences-and-series') {
+    // A sequence question typically lists terms separated by commas, or uses
+    // the word "sequence"/"series"/"term"/"sum"/"nth".
+    if (!/,\s*\d/.test(q) && !/\b(sequence|series|term|sum|nth)\b/i.test(q)) return false;
+  }
+  if (topic === 'functions') {
+    // Functions questions evaluate or compose a function — require f(...) /
+    // g(...) / h(...) notation OR the word "function".
+    if (!/[fgh]\s*\(/i.test(q) && !/\bfunction\b/i.test(q)) return false;
+  }
+  if (topic === 'geometry') {
+    // Geometry questions must reference an actual geometric concept — shape
+    // name, named quantity (area/perimeter/volume), or the Pythagorean
+    // `a^2 + b^2 = c^2` form. Without this, the AI's "9 - 3" / "3²" style
+    // bare-arithmetic generations slip through and feel like junk.
+    const hasGeomKeyword = /\b(area|perimeter|volume|surface|triangle|circle|square|rectangle|cube|cylinder|sphere|cone|pyramid|prism|trapezoid|rhombus|parallelogram|pythagorean|hypotenuse|radius|diameter|circumference|leg|side|angle|polygon|height|base|width|length|diagonal)\b/i.test(q);
+    const hasPythagoreanForm = /([a-z]\s*\^?\s*2.*\+.*[a-z]\s*\^?\s*2.*=.*[a-z]\s*\^?\s*2)|(\d+\s*\^?\s*2.*\+.*\d+\s*\^?\s*2.*=.*[a-z]\s*\^?\s*2)/i.test(q);
+    if (!hasGeomKeyword && !hasPythagoreanForm) return false;
+  }
+  if (topic === 'probability') {
+    // Probability questions must describe an event scenario or use the P(...)
+    // notation. Without this, the category degenerates into bare expressions
+    // like "P(4) = 1/8" with no context.
+    const hasScenario = /\b(dice|die|coin|coins|card|cards|spinner|marble|marbles|ball|balls|bag|drawn|tossed|rolled|flipped|deck|suit|hearts|spades|diamonds|clubs|red|blue|green|color)\b/i.test(q);
+    const hasProb = /\b(probability|chance|likelihood|odds)\b/i.test(q);
+    const hasPNotation = /\bp\s*\(/i.test(q);
+    if (!hasScenario && !hasProb && !hasPNotation) return false;
+  }
+  if (topic === 'fractions') {
+    // Fractions questions must contain a fraction-like expression or the
+    // word "fraction". Pure decimal arithmetic doesn't belong here.
+    if (!/\d\s*\/\s*\d/.test(q) && !/\\frac/.test(q) && !/\bfractions?\b/i.test(q)) return false;
+  }
+  return true;
+}
 function _getRecentQuestions() {
   try { const v = JSON.parse(localStorage.getItem('mathix_recent_questions') || '[]'); return Array.isArray(v) ? v : []; }
   catch(_) { return []; }
@@ -12582,17 +12833,31 @@ async function startPractice() {
     hard: 'challenging, university level, with complex values'
   };
 
+  // Per-topic instructions for the generator. EVERY topic-slug rendered as
+  // a button in the practice UI must have a corresponding entry here — when
+  // a slug is missing, the prompt interpolates `undefined` and the AI then
+  // produces nonsense or off-topic content (this was the root cause of the
+  // Functions / Systems / Vectors category-drift bug). Keep the slugs in
+  // sync with the .topic-btn data-topic values in the HTML.
   const topicDesc = {
-    algebra: 'linear equations with one variable (e.g. 2x + 3 = 11)',
-    quadratic: 'quadratic equations (e.g. x^2 - 5x + 6 = 0)',
-    trigonometry: 'trigonometry (sin, cos, tan values and identities)',
-    'calculus-derivatives': 'derivatives using power rule, chain rule, product rule',
-    'calculus-integrals': 'basic indefinite integrals',
-    logarithms: 'logarithm and exponential equations',
-    statistics: 'mean, median, standard deviation, probability',
-    geometry: 'area, perimeter, volume, Pythagorean theorem',
-    fractions: 'fractions, mixed numbers, operations with fractions',
-    exponents: 'exponent rules, simplification, scientific notation'
+    fractions:                'fraction arithmetic — adding, subtracting, multiplying, dividing simple fractions. ANSWERS MUST BE IN FULLY-SIMPLIFIED FRACTION FORM (e.g. "5/6", "1/2", "7/4"). Always reduce: never emit "4/6" when "2/3" is the simplified equivalent. Never use decimal approximations like "0.83" for "5/6". Fractions taught with fractions, always.',
+    decimals:                 'decimal arithmetic — adding, subtracting, multiplying, dividing decimal numbers (e.g. "0.25 + 0.5"). Answers in decimal form.',
+    percentages:              'percentage word-style problems. The question MUST be a complete English sentence containing the word "percent" or the symbol "%". Examples: "What is 25% of 80?", "10 is what percent of 50?", "If a price increases from $40 to $50, what is the percent increase?". The answer is the numeric result (with or without %). NEVER emit a question that is just a bare number or symbol with no sentence — that is invalid.',
+    exponents:                'exponent rules and simplification (e.g. 2^3, (a^m)^n, negative exponents, scientific notation)',
+    algebra:                  'linear equations with one variable (e.g. 2x + 3 = 11) — solve for x',
+    quadratic:                'quadratic equations with two real roots (e.g. x^2 - 5x + 6 = 0). Use the expectedAnswers field to list BOTH roots (e.g. "expectedAnswers": ["2", "3"]).',
+    functions:                'function evaluation: given f(x) = some expression, compute f(a) for a specific value of a. Question should be like "If f(x) = 2x + 3, find f(5)". NEVER emit expressions that involve division by zero or undefined operations.',
+    'systems-of-equations':   'systems of TWO linear equations in two unknowns (x and y). Question should present both equations clearly, e.g. "Solve: 2x + y = 7, x - y = 2". The answer is the unique solution pair (x, y) — format as "x=3, y=1" or as a pair like "(3, 1)".',
+    geometry:                 'Geometry problems with EXPLICIT geometric context — must reference shapes (triangle, circle, rectangle, square, cube, cylinder, sphere, etc.) OR a named geometric quantity (area, perimeter, volume, hypotenuse, radius, diameter, circumference). NEVER emit bare arithmetic like "9 - 3" or "3²" disguised as geometry. Questions should be a complete sentence (e.g. "Find the area of a triangle with base 6 and height 4", "A right triangle has legs 2 and 5. Find the hypotenuse c."). ANSWERS MUST USE EXACT SYMBOLIC FORM whenever the value is irrational: "√29" not "5.3851648"; "256π/3" or "\\frac{256\\pi}{3}" not "268.082573"; "48π" not "150.7963"; "16π" not "50.265". Decimal-only answers are acceptable only when the value is rational (e.g. area = 12, perimeter = 24).',
+    trigonometry:             'trigonometric values and identities (sin, cos, tan at standard angles 0°, 30°, 45°, 60°, 90°)',
+    vectors:                  '2D vector operations — addition, subtraction, scalar multiplication, magnitude, or dot product. Use standard LaTeX notation in the question text: \\langle 3, 4 \\rangle for vector components and \\| v \\| for magnitude. Examples: "Find the magnitude of \\langle 3, 4 \\rangle", "Compute 2\\langle 1, 2 \\rangle + \\langle 3, -1 \\rangle", "Find the dot product of \\langle 1, 2 \\rangle and \\langle 3, 4 \\rangle". MAGNITUDE ANSWERS MUST STAY IN EXACT RADICAL FORM (e.g. "√13", "\\sqrt{29}") — never decimal approximations like "3.605551". Vector-result answers should be in component form: "⟨a, b⟩" or "<a, b>".',
+    limits:                   'simple limits of polynomial or rational expressions as x approaches a finite value (avoid 0/0 indeterminate forms unless they simplify cleanly)',
+    'calculus-derivatives':   'derivatives using power rule, chain rule, or product rule — answer is the derivative expression',
+    'calculus-integrals':     'basic indefinite integrals — answer is the antiderivative + C (omit + C in the answer field for simplicity)',
+    statistics:               'mean, median, mode, standard deviation, or range of a short list of numbers. Question should clearly present the list, e.g. "Find the mean of: 2, 4, 6, 8".',
+    probability:              'Probability problems with EXPLICIT EVENT CONTEXT — must describe a real scenario (dice, coins, cards, marbles, balls in a bag, spinners, etc.) and the event being measured. NEVER emit bare "P(X) = ?" or pure-expression questions. Vary the scenarios across the session — do NOT repeat the same dice/coin template multiple times. Easy: direct probability of a simple event (e.g. "A coin is flipped. Find P(heads)"). Medium: complements or combined independent events (e.g. "Two fair dice are rolled. Find P(sum = 7)"). Hard: combinations / conditional / permutations. ANSWERS MUST BE IN FULLY-SIMPLIFIED FRACTION FORM (e.g. "1/6", "3/8"), never ugly decimal approximations like "0.08333333".',
+    logarithms:               'logarithm evaluation and simple equations (e.g. log_2(8), log_10(100))',
+    'sequences-and-series':   'arithmetic or geometric sequences. Question must be a complete sentence, e.g. "Find the 5th term of the arithmetic sequence: 2, 5, 8, 11, ...". The answer is the requested term or sum.',
   };
 
   const recent = _getRecentQuestions();
@@ -12600,17 +12865,37 @@ async function startPractice() {
     ? `\n\nAVOID generating problems similar to any of these recently shown:\n${recent.slice(-15).map(q => `- ${q}`).join('\n')}`
     : '';
 
-  const prompt = `Generate ${practiceQty} unique math practice problems about ${topicDesc[practiceTopic]}.
+  // Defensive default: if a topic slug is somehow missing from the table,
+  // fall back to a generic instruction rather than letting `undefined` leak
+  // into the prompt and produce nonsense output. This is a belt-and-
+  // suspenders guard — every slug should be in topicDesc above.
+  const topicInstruction = topicDesc[practiceTopic] || practiceTopic.replace(/-/g, ' ');
+  const prompt = `Generate ${practiceQty} unique math practice problems strictly about ${topicInstruction}.
 Difficulty: ${diffDesc[practiceDiff]}.
 
-RULES:
-- Each problem must have a clean, exact answer (integer or simple fraction or decimal)
-- Problems should be varied, not repetitive
-- No word problems — pure math notation only
-- Answers should be verifiable by a calculator${recentText}
+MANDATORY RULES — generation MUST follow ALL of these:
+- Every problem must be strictly about the topic above. No cross-topic drift.
+- Each problem must have a clean, exact, finite answer (integer or simple fraction or decimal).
+- NEVER use division by zero. Reject any expression of the form X/0, X÷0, or anything that evaluates to undefined / infinity / NaN.
+- NEVER produce "undefined", "infinity", "no solution", "DNE", "impossible", or empty as the answer.
+- NEVER produce malformed notation (mismatched brackets, dangling operators, incomplete fractions).
+- Problems must be mathematically valid and solvable using standard arithmetic / algebra.
+- Problems should be varied, not repetitive.
+- No word problems — pure math notation only.
+- Answers should be verifiable by a calculator.
+- For quadratic / equation problems with two roots, set the answer to one root and list both roots in expectedAnswers (see schema below).
+${recentText}
 
-Reply ONLY with a JSON array, no markdown, no backticks:
-[{"question":"the math problem as text","answer":"exact answer","hint":"one-sentence hint if stuck","explanation":"brief solution method"}]`;
+Reply ONLY with a JSON array, no markdown, no backticks. Each item uses this schema:
+[
+  {
+    "question": "the math problem as text",
+    "answer": "exact primary answer (single value)",
+    "expectedAnswers": ["alt form 1", "alt form 2"],   // OPTIONAL — include only when multiple valid answers exist (e.g. quadratic with two real roots). Omit entirely for single-answer problems.
+    "hint": "one-sentence hint if stuck",
+    "explanation": "brief solution method"
+  }
+]`;
 
   try {
     const text = await callAI(
@@ -12627,9 +12912,15 @@ Reply ONLY with a JSON array, no markdown, no backticks:
     // Structural filter: drop any AI output that duplicates a recent question
     // (the model sometimes ignores the prompt-level anti-repeat instruction).
     const recentSet = new Set(recent.map(_normalizeQ));
-    const filtered = parsed.filter(p => !recentSet.has(_normalizeQ(p.question)));
+    const dedup = parsed.filter(p => !recentSet.has(_normalizeQ(p.question)));
+    // Validity filter: drop AI outputs that are mathematically broken (div by
+    // zero in the question, "undefined" / "DNE" / "no solution" as the
+    // answer, empty fields, mismatched brackets). The AI prompt asks the
+    // model NOT to produce these, but it still slips occasionally — this is
+    // the deterministic post-generation guard.
+    const filtered = dedup.filter(p => _isValidPracticeProblem(p, practiceTopic));
     if (filtered.length < Math.max(1, Math.ceil(practiceQty / 2))) {
-      throw new Error('Too many duplicates after structural filter — falling back');
+      throw new Error('Too many invalid or duplicate problems after filter — falling back');
     }
     practiceSession = filtered;
     practiceIdx = 0;
@@ -12658,6 +12949,18 @@ function showQuiz() {
 
 function loadQuestion() {
   const q = practiceSession[practiceIdx];
+  // Defensive: if the session is empty (AI returned 0 valid problems AND the
+  // fallback bank had nothing for this topic/difficulty), gracefully bounce
+  // the user back to the setup screen with an explanation rather than
+  // letting `q.question` crash. Should not happen in normal flow — every
+  // path that sets practiceSession either provides at least one item or
+  // throws and falls back. This is a belt-and-suspenders guard for the
+  // edge case where both paths produce nothing.
+  if (!q || q.question == null) {
+    try { quitPractice(); } catch(_) {}
+    try { toast('No problems available for this topic — try another.', { variant: 'warn' }); } catch(_) {}
+    return;
+  }
   const total = practiceSession.length;
   const pct = (practiceIdx / total * 100) + '%';
 
@@ -12669,15 +12972,124 @@ function loadQuestion() {
   const topicLabel = topicMap[practiceTopic] ? t(topicMap[practiceTopic]) : practiceTopic.replace('-',' ');
   const diffLabel  = diffMap[practiceDiff]   ? t(diffMap[practiceDiff])   : practiceDiff;
   document.getElementById('quiz-topic-tag').textContent = topicLabel + ' · ' + diffLabel;
-  // Render the prompt with KaTeX. If a question contains plain English
-  // (e.g. "Solve: 2x + 3 = 7"), the transpiler safely leaves the prose
-  // alone and renders only the mathematical portions.
-  renderMathTo(document.getElementById('quiz-question'), q.question);
+  // ── MULTI-SLOT UI / HINT TOGGLE ──────────────────────────────────────────
+  // Derive the canonical accepted-answer list (preferring q.expectedAnswers,
+  // falling back to a split of legacy "A or B" answer strings), then DEDUPE
+  // by mathematical equivalence so that AI-emitted textual duplicates
+  // ("6π" + "6*pi") collapse to a single distinct solution. This is the
+  // gate for activating the multi-slot UI — without it, the circumference-
+  // of-a-circle question (single solution `6π`) was incorrectly rendering
+  // two input fields because the AI shipped two textually-different but
+  // mathematically-identical entries.
+  const acceptedList = (() => {
+    let raw = null;
+    if (Array.isArray(q.expectedAnswers) && q.expectedAnswers.length > 0) {
+      raw = q.expectedAnswers;
+    } else if (typeof q.answer === 'string' && / +or +/i.test(q.answer)) {
+      raw = q.answer.split(/ +or +/i).map(s => s.trim()).filter(Boolean);
+    }
+    if (!raw) return null;
+    const deduped = _dedupeExpectedAnswers(raw);
+    return deduped.length > 0 ? deduped : null;
+  })();
+  // Cache for checkAnswer so it grades against the same deduped list the
+  // UI was activated for.
+  _practiceAcceptedAnswers = acceptedList;
+  // Slot 2: shown when the question expects exactly 2 distinct solutions.
+  // For >2 (rare — cubic roots etc.) we still fall back to a single slot
+  // with the "multiple solutions accepted" hint chip; the 2-slot UI is the
+  // tested case and aligns with how quadratics work pedagogically.
+  const slot2 = document.getElementById('quiz-input-2');
+  const slotSep = document.getElementById('quiz-slot-sep');
+  const useTwoSlots = !!(acceptedList && acceptedList.length === 2);
+  // Hand off the UI mode to checkAnswer via the module-scope flag. See its
+  // declaration block for why we don't read it from the DOM at grade time.
+  _practiceUseMultiSlot = useTwoSlots;
+  // Refine placeholders per slot mode.
+  //
+  // MathLive 0.99 LIMITATION: the math-field renders the placeholder into
+  // shadow DOM at mount time. Subsequent attribute changes update internal
+  // options but DON'T trigger a re-render of the placeholder element. So
+  // setAttribute('placeholder', X) and mf.placeholder=X and even
+  // mf.setOptions({placeholder:X}) all silently fail to update what the
+  // user sees — which was why the boot-time "Your answer" / "Other solution"
+  // text persisted across every question regardless of slot mode.
+  //
+  // FIX: write the attribute (so internal state stays consistent in case a
+  // future MathLive version reads it again), then directly mutate the
+  // INNERMOST `.ML__text` text node inside the shadow `[part=placeholder]`
+  // tree. Verified that MathLive does NOT overwrite text-node content once
+  // the structure is established — only setting `.textContent` on the OUTER
+  // [part=placeholder] (which destroys structure) gets restored. The
+  // raf-then-fallback-timer pattern handles both the fast path (when the
+  // placeholder is already in the shadow DOM) and the slow path (when
+  // MathLive hasn't finished its first render yet).
+  try {
+    const _applyPlaceholder = (host, latexAttr, displayText) => {
+      const mf = host && host._mfElement;
+      if (!mf) return;
+      // Write the attribute first — keeps MathLive's internal options in
+      // sync (matters for any future re-render the library does trigger).
+      try { mf.setAttribute('placeholder', latexAttr); } catch(_) {}
+      try { mf.placeholder = latexAttr; } catch(_) {}
+      // Then patch the rendered text directly. Try immediately, then on
+      // the next animation frame, then 50ms later — covers the timing of
+      // every MathLive render path observed in 0.99.
+      const patch = () => {
+        try {
+          const inner = mf.shadowRoot && mf.shadowRoot.querySelector('[part="placeholder"] .ML__text');
+          if (inner && inner.textContent !== displayText) inner.textContent = displayText;
+        } catch(_) {}
+      };
+      patch();
+      try { requestAnimationFrame(patch); } catch(_) {}
+      setTimeout(patch, 50);
+    };
+    const inputSlot1 = document.getElementById('quiz-input');
+    _applyPlaceholder(inputSlot1,
+      useTwoSlots ? '\\text{First solution}'  : '\\text{Enter your answer}',
+      useTwoSlots ? 'First solution'          : 'Enter your answer');
+    _applyPlaceholder(slot2, '\\text{Second solution}', 'Second solution');
+  } catch(_) {}
+  if (slot2 && slotSep) {
+    slot2.style.display = useTwoSlots ? '' : 'none';
+    slotSep.style.display = useTwoSlots ? '' : 'none';
+    // Mirror's display:none rule (.mf-mirror class added by setupMathField)
+    // takes precedence over inline style, so we toggle the visible mf-wrap.
+    const wrap2 = slot2._mfElement && slot2._mfElement.parentNode;
+    if (wrap2 && wrap2.classList.contains('mf-wrap')) {
+      wrap2.style.display = useTwoSlots ? '' : 'none';
+    }
+    // Clear slot 2's value when reused / hidden so stale answers don't leak.
+    slot2.value = '';
+    slot2.classList.remove('correct','wrong','simplify');
+    slot2.disabled = false;
+    try { syncMathField(slot2); } catch(_) {}
+  }
+  // Multi-solution hint: only show when there ARE multiple acceptable
+  // answers AND we're NOT using the explicit slot UI (so the chip and slot
+  // UI never coexist — slots replace the chip when active).
+  const multiHint = document.getElementById('quiz-multi-hint');
+  if (multiHint) {
+    const isMultiNoSlots = acceptedList && acceptedList.length > 1 && !useTwoSlots;
+    multiHint.style.display = isMultiNoSlots ? 'inline-block' : 'none';
+  }
+  // Practice-question rendering uses the prose-aware renderer: prose-heavy
+  // questions ("10 is what percent of 20", "Find the 5th term of...") go
+  // through prettyMath which preserves spaces and English; pure-math
+  // questions (`x^2 - 4 = 0`, `1/2 + 1/3`) go through KaTeX. Vector / norm
+  // notation is normalized up front so `<3,4>` and `||v||` render with
+  // proper angle brackets and double bars.
+  renderPracticeQuestion(document.getElementById('quiz-question'), q.question);
 
   const inp = document.getElementById('quiz-input');
   inp.value = '';
-  inp.classList.remove('correct','wrong');
-  inp.placeholder = t('practice.quiz.placeholder');
+  // Clear all status classes including 'simplify' so the yellow-state input
+  // border doesn't leak across questions if the previous answer was correct-
+  // but-reducible. Previous code only stripped correct/wrong, leaving the
+  // simplify class intact (currently no input.simplify CSS rule exists, but
+  // belt-and-suspenders for future styling).
+  inp.classList.remove('correct','wrong','simplify');
   inp.disabled = false;
   // Programmatic value changes don't fire `input` events. Push the empty
   // value into the visible math-field so the previous answer doesn't
@@ -12698,55 +13110,93 @@ function checkAnswer() {
   const inp = document.getElementById('quiz-input');
   if (!inp || inp.disabled) return; // already answered — guard against double-click
   if (PRACTICE_DEBUG) { try { console.group('[Practice] checkAnswer'); } catch(_) {} }
-  _pdLog('ENTRY — pre-flush state', {
-    'inp.value (mirror, pre-flush)': inp.value,
-    'inp._mfElement.value (math-field LaTeX, pre-flush)': inp._mfElement ? inp._mfElement.value : '(no _mfElement)',
-    'practiceIdx': practiceIdx,
-  });
-  // Force-flush the math-field's latest LaTeX into the mirror BEFORE reading.
-  // Without this, clicking Check immediately after typing the final character
-  // could read a one-frame-stale value (rAF-debounced sync), causing correct
-  // answers like `2/2`, `5/8` to be non-deterministically marked WRONG. This
-  // single call is the practice-side commit barrier — same role the Enter
-  // keydown handler plays for the keyboard-commit path.
+
+  // Detect multi-slot mode via the explicit hand-off flag set by loadQuestion.
+  // We DO NOT read this from the DOM (e.g. inp2.offsetParent) because the
+  // mirror has .mf-mirror { display:none !important } and would always
+  // report null offsetParent even when the visible math-field wrap is
+  // shown — that bug previously caused multi-slot questions to fall through
+  // to the single-answer set-grader, which only requires ONE correct match,
+  // and so a 1-right / 1-wrong submission was being marked fully correct.
+  const inp2 = document.getElementById('quiz-input-2');
+  const isMultiSlot = !!_practiceUseMultiSlot;
+
+  // Commit-barrier: flush both math-fields' latest LaTeX into their mirrors
+  // BEFORE reading. Same race-condition guard as before, applied to each
+  // visible slot.
   try { flushMathFieldToMirror(inp); } catch(_) {}
-  const userAns = inp.value.trim();
-  if (!userAns) {
-    _pdLog('EMPTY ANSWER — bailing out', {});
+  if (isMultiSlot) { try { flushMathFieldToMirror(inp2); } catch(_) {} }
+
+  const userAns1 = inp.value.trim();
+  const userAns2 = isMultiSlot ? inp2.value.trim() : '';
+
+  if (!userAns1 || (isMultiSlot && !userAns2)) {
     if (PRACTICE_DEBUG) { try { console.groupEnd(); } catch(_) {} }
-    toast(t('toast.typeAnswer'), { variant: 'warn' });
+    toast(isMultiSlot ? 'Please fill both answer fields' : t('toast.typeAnswer'), { variant: 'warn' });
     return;
   }
 
   const q = practiceSession[practiceIdx];
   if (!q) {
-    _pdLog('NO QUESTION — bailing out', { practiceIdx });
     if (PRACTICE_DEBUG) { try { console.groupEnd(); } catch(_) {} }
     return;
   }
   _pdLog('post-flush — values about to be graded', {
-    'userAns (mirror after flush, trimmed)': userAns,
-    'q.answer (RAW from AI/fallback)': q.answer,
-    'q.answer typeof': typeof q.answer,
-    'q.answer JSON.stringify': JSON.stringify(q.answer),
-    'q.hint': q.hint,
+    'userAns1': userAns1, 'userAns2 (if multi)': userAns2, 'isMultiSlot': isMultiSlot,
+    'q.answer': q.answer, 'q.expectedAnswers': q.expectedAnswers,
   });
 
   // ─── SINGLE SOURCE OF TRUTH ─────────────────────────────────────────────
-  // One call grades the answer end-to-end. Every UI mutation below — input
-  // border class, feedback box variant + message, stats increments, hint
-  // visibility — is derived deterministically from this verdict. There is
-  // no second validation call anywhere in this function, so the boolean
+  // One grading call produces the verdict + (in multi-slot) per-slot results.
+  // Every UI mutation below — input border classes, feedback variant,
+  // stats, hint visibility — derives from this struct, so the boolean
   // "is this correct?" and the visual "what tone does the user see?"
-  // CANNOT disagree.
-  const grade = gradeAnswer(userAns, q.answer);
-  const isPass = (grade.verdict !== 'wrong');
-  _pdLog('FINAL VERDICT', { verdict: grade.verdict, suggestion: grade.suggestion, isPass });
+  // cannot disagree.
+  //
+  // ROUTING (three cases):
+  //   isMultiSlot               → gradeAnswerSlots (one-to-one, all required)
+  //   else q.expectedAnswers[]  → gradeAnswerSet (any one acceptable)
+  //   else                      → gradeAnswer (classic single-answer)
+  let grade;
+  // Use the MATHEMATICALLY DEDUPED list (set by loadQuestion via
+  // `_dedupeExpectedAnswers`). Falling back to `q.expectedAnswers`
+  // here would let textually-distinct-but-equivalent forms be graded
+  // as separate slots, which is the exact bug we're fixing.
+  const accepted = _practiceAcceptedAnswers;
+  if (isMultiSlot && Array.isArray(accepted) && accepted.length >= 2) {
+    grade = gradeAnswerSlots([userAns1, userAns2], accepted);
+  } else if (Array.isArray(accepted) && accepted.length > 0) {
+    grade = gradeAnswerSet(userAns1, accepted);
+  } else {
+    grade = gradeAnswer(userAns1, q.answer);
+  }
+  // `isPass` controls stats/streak — only fully-correct (or simplify, which is
+  // still a complete correct solution set) counts as a pass. `partial` is
+  // pedagogically a near-miss, NOT a success: stats stay flat, streak resets.
+  const isPass = (grade.verdict === 'correct' || grade.verdict === 'simplify');
+  _pdLog('FINAL VERDICT', { verdict: grade.verdict, suggestion: grade.suggestion, perSlot: grade.perSlot, reason: grade.reason, isPass });
   if (PRACTICE_DEBUG) { try { console.groupEnd(); } catch(_) {} }
 
-  inp.classList.remove('correct','wrong');
-  inp.classList.add(isPass ? 'correct' : 'wrong');
+  // ── Per-slot visual feedback ────────────────────────────────────────────
+  // Each slot's border colour reflects ITS OWN verdict for multi-slot. For
+  // single-slot the existing behaviour is preserved (slot 1 only).
+  inp.classList.remove('correct','wrong','simplify');
   inp.disabled = true;
+  if (isMultiSlot && Array.isArray(grade.perSlot)) {
+    inp2.classList.remove('correct','wrong','simplify');
+    inp2.disabled = true;
+    // Map slot index → verdict-specific border class.
+    // correct  → green, simplify → yellow, wrong → red.
+    for (const s of grade.perSlot) {
+      const target = (s.slot === 0) ? inp : (s.slot === 1 ? inp2 : null);
+      if (!target) continue;
+      if (s.verdict === 'correct') target.classList.add('correct');
+      else if (s.verdict === 'simplify') target.classList.add('simplify');
+      else target.classList.add('wrong');
+    }
+  } else {
+    inp.classList.add(isPass ? 'correct' : 'wrong');
+  }
   const checkBtn2 = document.querySelector('.quiz-check-btn');
   if (checkBtn2) checkBtn2.disabled = true;
 
@@ -12759,16 +13209,44 @@ function checkAnswer() {
     fb.textContent = msgs[Math.floor(Math.random()*msgs.length)];
   } else if (grade.verdict === 'simplify') {
     fb.className = 'quiz-feedback simplify';
-    fb.innerHTML = `✓ Correct — but try simplifying. Equivalent form: <strong data-math="${escapeHtml(grade.suggestion)}"></strong>`;
+    // Suggestion is typically already a simplified fraction string like
+    // "1/2"; pipe through both formatters defensively so any decimal that
+    // slips in still beautifies and never reaches the user as raw float.
+    const suggestionStr = grade.suggestion
+      ? _toExactDisplay(_simplifyForDisplay(String(grade.suggestion)))
+      : '';
+    fb.innerHTML = suggestionStr
+      ? `✓ Correct — but try simplifying. Equivalent form: <strong data-math="${escapeHtml(suggestionStr)}"></strong>`
+      : `✓ Correct — but a simpler equivalent form exists.`;
+    renderAllMathIn(fb);
+  } else if (grade.verdict === 'partial') {
+    // Multi-slot partial-credit case: some slots correct, some wrong. Yellow
+    // feedback (consistent with the simplify tone) but the message clearly
+    // states it's not fully correct and shows which expected answer(s) the
+    // user MISSED. Per-slot borders below already reflect the correct/wrong
+    // per slot, so the visual is fully consistent.
+    fb.className = 'quiz-feedback simplify';
+    const correctSlots = (grade.perSlot || []).filter(s => s.verdict !== 'wrong').length;
+    const totalSlots = (grade.perSlot || []).length;
+    const missed = (grade.unmatchedExpected || []).map(a =>
+      `<strong data-math="${escapeHtml(_toExactDisplay(_simplifyForDisplay(String(a == null ? '' : a))))}"></strong>`
+    );
+    const missedHtml = missed.length === 1
+      ? `The other solution is ${missed[0]}.`
+      : `The other solutions are ${missed.join(' and ')}.`;
+    fb.innerHTML = `<strong style="color:#fcd34d">Partial:</strong> you got ${correctSlots} of ${totalSlots} correct. ${missedHtml}`;
     renderAllMathIn(fb);
   } else {
-    // verdict === 'wrong'. Hint is shown ONLY in this branch (never on a
-    // passing answer), so there is no path on which a hint can appear next
-    // to a correct verdict. Hint text is run through prettyMath() so math
-    // segments render as Unicode while prose stays readable.
+    // verdict === 'wrong'. Hint is shown ONLY in this branch.
+    // Multi-slot: separator is "and" (all required). Single-slot with
+    // multiple accepted forms: separator is "or" (any acceptable).
     fb.className = 'quiz-feedback wrong';
     const hintPretty = q.hint ? prettyMath(q.hint) : '';
-    fb.innerHTML = `${escapeHtml(t('practice.fb.wrong'))} <strong class="qa-expected" data-math="${escapeHtml(q.answer)}" style="color:var(--text)"></strong>${q.hint ? `<br><span style="opacity:.8;font-size:13px">${escapeHtml(t('practice.fb.hint'))} ${escapeHtml(hintPretty)}</span>` : ''}`;
+    let reasonNote = '';
+    if (isMultiSlot && grade.reason === 'duplicate') {
+      reasonNote = ' (your two answers are the same — both solutions are required)';
+    }
+    fb.innerHTML = `${escapeHtml(t('practice.fb.wrong'))} ${_renderExpectedAnswersHtml(q, { allRequired: isMultiSlot })}${escapeHtml(reasonNote)}${q.hint ? `<br><span style="opacity:.8;font-size:13px">${escapeHtml(t('practice.fb.hint'))} ${escapeHtml(hintPretty)}</span>` : ''}`;
     renderAllMathIn(fb);
   }
 
@@ -13199,14 +13677,446 @@ function gradeAnswer(userText, expectedText) {
   return { verdict: 'correct', suggestion: null };
 }
 
+// ─── MULTI-ANSWER WRAPPER ──────────────────────────────────────────────────
+// Thin extension over `gradeAnswer` for questions that define an explicit
+// set of acceptable answers (`q.expectedAnswers = ['1/2', '0.5']` etc.). The
+// user provides a single answer; we grade it against EACH expected item via
+// the existing pipeline and return the BEST result across all comparisons
+// (correct > simplify > wrong). No new equivalence logic, no new parsing —
+// just an OR over `gradeAnswer` results. Pure / deterministic / no DOM.
+//
+// Returned shape mirrors `gradeAnswer` plus a `matched` field naming the
+// expected item that produced the best verdict (useful for diagnostics; not
+// currently surfaced in UI).
+//
+//   { verdict: 'correct' | 'simplify' | 'wrong',
+//     suggestion: string | null,
+//     matched: string | null }
+//
+// If `expectedAnswers` is missing/empty, returns 'wrong' — callers must
+// check that case and route to single-answer `gradeAnswer` with `q.answer`.
+function gradeAnswerSet(userText, expectedAnswers) {
+  if (!Array.isArray(expectedAnswers) || expectedAnswers.length === 0) {
+    return { verdict: 'wrong', suggestion: null, matched: null };
+  }
+  let best = { verdict: 'wrong', suggestion: null, matched: null };
+  for (const exp of expectedAnswers) {
+    const r = gradeAnswer(userText, exp);
+    if (r.verdict === 'correct') {
+      // Highest tier — short-circuit. The FIRST expected that produces a
+      // fully-simplified correct match wins, so the recorded `matched`
+      // reflects the canonical preferred form (assuming the data lists it
+      // first, which is the convention).
+      return { verdict: 'correct', suggestion: null, matched: exp };
+    }
+    if (r.verdict === 'simplify' && best.verdict !== 'correct') {
+      best = { verdict: 'simplify', suggestion: r.suggestion, matched: exp };
+    }
+  }
+  _pdLog('gradeAnswerSet final', best);
+  return best;
+}
+
+// ─── EXPECTED-ANSWER DEDUPLICATION ─────────────────────────────────────────
+// Collapse a list of accepted-answer strings to one entry per mathematically
+// distinct solution. AI generation sometimes ships textually-different but
+// numerically-identical forms (e.g. ["6π", "6*pi"], ["1/2", "0.5"], ["√13",
+// "3.6055"]). Without this dedup, the multi-slot UI would incorrectly
+// activate (treating equivalent representations as separate solutions) and
+// a user typing one correct answer + a different value would be marked
+// "partial credit" against an expected they actually already gave.
+//
+// Uses the EXISTING `isCorrect` equivalence engine — no new comparison
+// logic. Pure / no DOM / O(N²) but N is tiny (≤ 4 in practice).
+function _dedupeExpectedAnswers(arr) {
+  if (!Array.isArray(arr)) return [];
+  const out = [];
+  for (const raw of arr) {
+    const s = String(raw == null ? '' : raw).trim();
+    if (!s) continue;
+    let isDup = false;
+    for (const kept of out) {
+      // Symmetric equivalence check via the same validator the user is
+      // graded against. If `s` would be accepted as an answer for `kept`
+      // AND vice-versa, they're the same mathematical solution.
+      try {
+        if (isCorrect(s, kept) && isCorrect(kept, s)) { isDup = true; break; }
+      } catch(_) {}
+    }
+    if (!isDup) out.push(s);
+  }
+  return out;
+}
+
+// ─── MULTI-SLOT GRADER ─────────────────────────────────────────────────────
+// For questions that ship with `expectedAnswers.length >= 2` AND the UI is
+// showing one input slot per expected answer (true multi-answer UX, e.g.
+// quadratic roots). The user provides ONE input per slot; we assign each
+// user input to an expected answer one-to-one via permutation search, then
+// compute an aggregate verdict. Composes `gradeAnswer` — no new equivalence
+// logic, no new parsing, no DOM access (pure).
+//
+// CONTRACT:
+//   userInputs:       Array<string>  (raw mirror values per visible slot)
+//   expectedAnswers:  Array<string>  (canonical answers in q.expectedAnswers)
+//
+//   Returns: {
+//     verdict:    'correct' | 'simplify' | 'partial' | 'wrong',
+//     suggestion: string | null,
+//     perSlot:    Array<{ slot, verdict, suggestion, matched }>,
+//     reason:     'missing' | 'extra' | 'duplicate' | null,
+//     unmatchedExpected: Array<string>  (expected answers no slot matched —
+//                                        used by the partial-credit display)
+//   }
+//
+// VERDICT RULES:
+//   - 'correct'  : every slot grades 'correct' against a DISTINCT expected
+//   - 'simplify' : every slot grades 'correct' or 'simplify', at least one
+//                  was simplify (e.g. user typed 2/4 when expected was 1/2)
+//   - 'partial'  : some slots grade correct/simplify AND some grade wrong.
+//                  The user demonstrated PART of the solution set but missed
+//                  one or more solutions. Treated as not-fully-correct for
+//                  stats/streak (does NOT increment correct, resets streak)
+//                  but rendered in yellow rather than red so the partial
+//                  achievement is visible.
+//   - 'wrong'    : every slot grades wrong, OR a user input is a duplicate
+//                  of another (no partial-credit if they just typed the same
+//                  thing twice — duplicates indicate they didn't find a 2nd
+//                  solution), OR a required slot is empty.
+//
+// Iterates all N! permutations (N is tiny — typically 2). For each, the
+// permutation that minimises wrong-count then minimises simplify-count wins.
+function gradeAnswerSlots(userInputs, expectedAnswers) {
+  if (!Array.isArray(userInputs) || !Array.isArray(expectedAnswers) || expectedAnswers.length === 0) {
+    return { verdict: 'wrong', suggestion: null, perSlot: [], reason: 'missing' };
+  }
+  // Trim user inputs and track original slot indices.
+  const provided = [];
+  for (let i = 0; i < userInputs.length; i++) {
+    const raw = String(userInputs[i] == null ? '' : userInputs[i]).trim();
+    if (raw) provided.push({ value: raw, slot: i });
+  }
+  // Mismatch on count → wrong with reason.
+  if (provided.length < expectedAnswers.length) {
+    return { verdict: 'wrong', suggestion: null, perSlot: [], reason: 'missing' };
+  }
+  if (provided.length > expectedAnswers.length) {
+    return { verdict: 'wrong', suggestion: null, perSlot: [], reason: 'extra' };
+  }
+  // Duplicate detection — compute canonical numeric/normalized form for each
+  // input, reject if any two coincide. Same answer twice is not acceptable
+  // for a multi-slot question (e.g. user enters "3" and "3" for x^2=9).
+  const canon = provided.map(p => {
+    try {
+      const v = math.evaluate(_normAns(_unwrapLatex(p.value)));
+      const n = _toFiniteNumber(v);
+      if (n != null) return 'num:' + n.toFixed(10);
+    } catch(_) {}
+    return 'str:' + _normAns(_unwrapLatex(p.value));
+  });
+  const seenCanon = new Set();
+  for (const c of canon) {
+    if (seenCanon.has(c)) {
+      return { verdict: 'wrong', suggestion: null, perSlot: [], reason: 'duplicate' };
+    }
+    seenCanon.add(c);
+  }
+  // Permutation search. For each permutation of expected-indices, grade
+  // provided[i].value against expectedAnswers[perm[i]] and tally results.
+  function permutations(arr) {
+    if (arr.length <= 1) return [arr.slice()];
+    const out = [];
+    for (let i = 0; i < arr.length; i++) {
+      const rest = arr.slice(0, i).concat(arr.slice(i + 1));
+      for (const p of permutations(rest)) out.push([arr[i]].concat(p));
+    }
+    return out;
+  }
+  const expIdx = expectedAnswers.map((_, i) => i);
+  const perms = permutations(expIdx);
+  let best = null;
+  for (const perm of perms) {
+    const slotResults = [];
+    let wrongCount = 0;
+    let simplifyCount = 0;
+    for (let i = 0; i < provided.length; i++) {
+      const ei = perm[i];
+      const r = gradeAnswer(provided[i].value, expectedAnswers[ei]);
+      slotResults.push({ slot: provided[i].slot, verdict: r.verdict, suggestion: r.suggestion, matched: expectedAnswers[ei] });
+      if (r.verdict === 'wrong') wrongCount++;
+      else if (r.verdict === 'simplify') simplifyCount++;
+    }
+    // Lower wrongCount is strictly better; tie-break on lower simplifyCount.
+    if (!best || wrongCount < best.wrongCount ||
+        (wrongCount === best.wrongCount && simplifyCount < best.simplifyCount)) {
+      best = { perm, slotResults, wrongCount, simplifyCount };
+    }
+    if (wrongCount === 0 && simplifyCount === 0) break; // perfect — short-circuit
+  }
+  let verdict = 'wrong';
+  if (best.wrongCount === 0) {
+    verdict = best.simplifyCount > 0 ? 'simplify' : 'correct';
+  } else if (best.wrongCount < provided.length) {
+    // Some slots matched, others didn't. Educational PARTIAL credit state.
+    verdict = 'partial';
+  }
+  // First simplify-suggestion across slots, for the feedback panel.
+  let suggestion = null;
+  for (const s of best.slotResults) {
+    if (s.verdict === 'simplify' && s.suggestion) { suggestion = s.suggestion; break; }
+  }
+  // Identify expected answers that NO slot matched (for the partial-credit
+  // feedback panel). Walk the chosen permutation and collect any expected
+  // index whose corresponding slot graded wrong.
+  const unmatchedExpected = [];
+  for (let i = 0; i < provided.length; i++) {
+    const ei = best.perm[i];
+    const slotV = best.slotResults[i].verdict;
+    if (slotV === 'wrong') unmatchedExpected.push(expectedAnswers[ei]);
+  }
+  return { verdict, suggestion, perSlot: best.slotResults, reason: null, unmatchedExpected };
+}
+
+// ─── MULTI-ANSWER DISPLAY HELPERS ──────────────────────────────────────────
+// Both transparently fall back to the single-answer field (`q.answer`) when
+// `q.expectedAnswers` is absent or empty, so existing question shapes render
+// exactly as before — zero regression in single-answer mode.
+
+// ─── CANONICAL ANSWER PRESENTATION LAYER ────────────────────────────────
+// Display-only beautification of raw numeric answer strings. Detects when
+// an ugly decimal like "268.082573106329" is secretly the value of a clean
+// symbolic form (256π/3, √13, 1/12, ...) and renders the symbolic form
+// alongside a sensibly-rounded approximation: "256π/3 ≈ 268.08".
+//
+// VALIDATOR CONTRACT IS UNTOUCHED:
+//   * gradeAnswer / isCorrect / _numericMatch operate on the RAW q.answer.
+//   * The validator continues to accept both decimal and symbolic forms
+//     thanks to math.evaluate equivalence + precision-aware tolerance.
+//   * This layer only rewrites strings on their way to the DOM.
+//
+// All outputs are LaTeX-friendly (use \frac, \sqrt, \pi, \approx) so the
+// existing KaTeX rendering pipeline (data-math attribute → renderAllMathIn)
+// produces properly stacked fractions, root signs, and π glyphs.
+
+function _gcd(a, b) {
+  a = Math.abs(a); b = Math.abs(b);
+  while (b) { const r = a % b; a = b; b = r; }
+  return a || 1;
+}
+
+// Format a number with educationally-clean precision: 2 decimals for values
+// ≥ 1, 4 decimals for values < 1 (so small probabilities like 1/12 → 0.0833
+// keep meaningful info instead of collapsing to 0.08). Detects integers and
+// returns them without a trailing ".00".
+function _roundNice(value) {
+  if (!isFinite(value)) return String(value);
+  if (Math.abs(value - Math.round(value)) < 1e-9) return String(Math.round(value));
+  const absVal = Math.abs(value);
+  const decimals = absVal >= 1 ? 2 : 4;
+  return value.toFixed(decimals);
+}
+
+// Detect a π-rational form. Returns LaTeX like "\\frac{256\\pi}{3}", "48\\pi",
+// or "\\pi" — or null if no clean π form fits. Searches denominators 1..12,
+// keeping the smallest-denominator hit.
+function _detectPiForm(num) {
+  const PI = Math.PI;
+  const tol = 1e-5;
+  const ratio = num / PI;
+  for (let q = 1; q <= 12; q++) {
+    const p = Math.round(ratio * q);
+    if (p === 0) continue;
+    if (Math.abs(ratio - p / q) > tol) continue;
+    if (Math.abs(p) > 200) continue; // skip ugly numerators
+    const g = _gcd(Math.abs(p), q);
+    const np = p / g, nq = q / g;
+    if (nq === 1 && Math.abs(np) === 1) return np < 0 ? '-\\pi' : '\\pi';
+    if (nq === 1) return `${np}\\pi`;
+    if (Math.abs(np) === 1) return `\\frac{${np < 0 ? '-\\pi' : '\\pi'}}{${nq}}`;
+    return `\\frac{${np}\\pi}{${nq}}`;
+  }
+  return null;
+}
+
+// Detect a radical form k·√n with non-square n ∈ [2, 50]. Returns LaTeX
+// like "\\sqrt{13}", "2\\sqrt{3}", or null. Negative inputs return null.
+function _detectRadicalForm(num) {
+  if (num <= 0) return null;
+  const tol = 1e-5;
+  // First: bare √n where num² is an integer that isn't a perfect square.
+  const sq = num * num;
+  if (Math.abs(sq - Math.round(sq)) < tol * Math.max(1, sq)) {
+    const n = Math.round(sq);
+    if (n >= 2) {
+      const sqrtN = Math.sqrt(n);
+      if (Math.abs(sqrtN - Math.round(sqrtN)) > 1e-6) {
+        return `\\sqrt{${n}}`;
+      }
+    }
+  }
+  // Then: k·√n for small k, n
+  for (let n = 2; n <= 50; n++) {
+    const sqrtN = Math.sqrt(n);
+    if (Math.abs(sqrtN - Math.round(sqrtN)) < 1e-9) continue; // skip perfect squares
+    const k = num / sqrtN;
+    const kInt = Math.round(k);
+    if (kInt === 0 || Math.abs(kInt) > 12) continue;
+    if (Math.abs(k - kInt) < tol) {
+      if (kInt === 1) return `\\sqrt{${n}}`;
+      if (kInt === -1) return `-\\sqrt{${n}}`;
+      return `${kInt}\\sqrt{${n}}`;
+    }
+  }
+  return null;
+}
+
+// Detect a simple fraction p/q with q ∈ [2, 16] and |p| ≤ 30. Returns LaTeX
+// "\\frac{p}{q}" or null. Picks the smallest denominator that fits.
+function _detectFractionForm(num) {
+  const tol = 1e-7;
+  let best = null;
+  for (let q = 2; q <= 16; q++) {
+    const p = Math.round(num * q);
+    if (p === 0) continue;
+    if (Math.abs(num - p / q) > tol) continue;
+    const g = _gcd(Math.abs(p), q);
+    const np = p / g, nq = q / g;
+    if (nq === 1) continue;                // integer in disguise
+    if (Math.abs(np) > 30) continue;       // ugly numerator
+    if (!best || nq < best.nq) best = { np, nq };
+  }
+  return best ? `\\frac{${best.np}}{${best.nq}}` : null;
+}
+
+// Combine a symbolic form with a rounded decimal. Uses "=" when the rounded
+// decimal happens to equal the input exactly (e.g. "\\frac{1}{2} = 0.5"),
+// and "≈" otherwise (e.g. "\\frac{1}{12} ≈ 0.0833"). The choice prevents
+// the slightly-misleading "1/2 ≈ 0.5" form where 1/2 = 0.5 exactly.
+function _formatExactWithApprox(symbolicLatex, num) {
+  const approx = _roundNice(num);
+  const exact = (parseFloat(approx) === num);
+  return `${symbolicLatex} ${exact ? '=' : '\\approx'} ${approx}`;
+}
+
+// Top-level beautifier. Takes a raw answer string (typically the AI's
+// q.answer or one element of q.expectedAnswers) and returns:
+//   • the string unchanged if it's already symbolic ("1/2", "√13", "π")
+//   • the string as a clean integer/decimal if it doesn't symbolize
+//   • a "symbolic form ≈/= decimal" sandwich if a clean form fits
+// Pure / deterministic / no DOM.
+function _toExactDisplay(rawAnswer) {
+  const raw = String(rawAnswer == null ? '' : rawAnswer).trim();
+  if (!raw) return raw;
+  // Only process pure numeric strings. Strings already containing letters,
+  // symbols (π / √), backslashes (LaTeX), or operators are left as-is so
+  // pre-formatted symbolic answers from the AI flow through untouched.
+  if (!/^-?\d+(\.\d+)?$/.test(raw)) return raw;
+  const num = parseFloat(raw);
+  if (!isFinite(num)) return raw;
+  // Integer
+  if (Math.abs(num - Math.round(num)) < 1e-9) return String(Math.round(num));
+  // Try symbolic forms in pedagogical preference order.
+  const piF  = _detectPiForm(num);   if (piF)  return _formatExactWithApprox(piF,  num);
+  const radF = _detectRadicalForm(num); if (radF) return _formatExactWithApprox(radF, num);
+  const frcF = _detectFractionForm(num); if (frcF) return _formatExactWithApprox(frcF, num);
+  // No symbolic form fits — return cleaned decimal (no float garbage).
+  return _roundNice(num);
+}
+
+// Simplify a fraction string for educational display: turn "4/6" into "2/3",
+// "8/12" into "2/3", "10/20" into "1/2". For non-fraction inputs (decimals,
+// integers, symbolic expressions, radicals, etc.) returns the input verbatim.
+// Display-only — the validator stays decimal-equivalence-based and accepts
+// unsimplified user input via the simplify yellow path. This just ensures
+// the displayed canonical answer is in textbook form.
+function _simplifyForDisplay(text) {
+  if (text == null) return '';
+  const raw = String(text).trim();
+  // Handle plain "a/b" or "(a)/(b)" — strip surrounding whitespace and parens
+  const m = raw.replace(/\s+/g, '').match(/^\(?(-?\d+)\)?\/\(?(-?\d+)\)?$/);
+  if (!m) return raw;
+  const a = parseInt(m[1], 10);
+  const b = parseInt(m[2], 10);
+  if (!isFinite(a) || !isFinite(b) || b === 0) return raw;
+  function gcd(x, y) { x = Math.abs(x); y = Math.abs(y); while (y) { const r = x % y; x = y; y = r; } return x || 1; }
+  const g = gcd(a, b);
+  if (g <= 1) return raw;  // already simplest form
+  const ns = a / g, ds = b / g;
+  const negative = (a < 0) !== (b < 0);
+  if (Math.abs(ds) === 1) return (negative ? '-' : '') + Math.abs(ns);
+  return (negative ? '-' : '') + Math.abs(ns) + '/' + Math.abs(ds);
+}
+
+// HTML for the "expected answer(s)" block in the wrong-feedback panel.
+// Sources of multi-answer data, in priority order:
+//   1) explicit `q.expectedAnswers` array (new structured form)
+//   2) legacy `q.answer` string containing " or " (fallback-bank form like
+//      "3 or -3" — many existing quadratic items use this shape)
+//   3) single chip from `q.answer`
+// Rendering each accepted answer as a separate KaTeX `data-math` chip with
+// PLAIN-TEXT " or " between them prevents KaTeX from interpreting the
+// separator as math (which was rendering "4 or -1" as italic "4or−1").
+function _renderExpectedAnswersHtml(q, opts) {
+  opts = opts || {};
+  // Separator: "and" when ALL listed answers are required (multi-slot mode),
+  // "or" when ANY single one is acceptable (single-slot with multiple
+  // accepted forms). Defaults to "or" for backwards compatibility.
+  const sep = opts.allRequired ? ' and ' : ' or ';
+  const single = (q && q.answer != null) ? String(q.answer) : '';
+  let list = (q && Array.isArray(q.expectedAnswers) && q.expectedAnswers.length > 0)
+    ? q.expectedAnswers
+    : null;
+  // Auto-split legacy "A or B" / "A or B or C" answer strings so the renderer
+  // produces multiple chips with plain text between them instead of one
+  // KaTeX-rendered chip that treats "or" as a variable.
+  if (!list && / +or +/i.test(single)) {
+    list = single.split(/ +or +/i).map(s => s.trim()).filter(Boolean);
+  }
+  if (!list || list.length === 0) {
+    // Single-chip case. Pipeline: _simplifyForDisplay first (turns "4/6"
+    // into "2/3"), then _toExactDisplay (turns ugly decimals like
+    // "268.082573" into "\\frac{256\\pi}{3} \\approx 268.08"). Both no-op
+    // on inputs they don't recognize.
+    return `<strong class="qa-expected" data-math="${escapeHtml(_toExactDisplay(_simplifyForDisplay(single)))}" style="color:var(--text)"></strong>`;
+  }
+  return list
+    .map(a => `<strong class="qa-expected" data-math="${escapeHtml(_toExactDisplay(_simplifyForDisplay(String(a == null ? '' : a))))}" style="color:var(--text)"></strong>`)
+    .join(sep);
+}
+
+// Canonical-answer string used for the "Show solution steps" AI prompt and
+// the fallback step display. For multi-answer, joins with " or " so the
+// solving prompt names every accepted form; single-answer is verbatim.
+function _canonicalAnswerForPrompt(q) {
+  // Each accepted form is run through the exact-display beautifier so the
+  // AI's solving prompt and the fallback step display BOTH see polished
+  // symbolic forms (`\frac{256\pi}{3} \approx 268.08`) instead of raw
+  // float dumps. The AI receiving the symbolic form generally produces
+  // cleaner step-by-step explanations too.
+  if (q && Array.isArray(q.expectedAnswers) && q.expectedAnswers.length > 0) {
+    return q.expectedAnswers.map(a => _toExactDisplay(String(a == null ? '' : a))).join(' or ');
+  }
+  return (q && q.answer != null) ? _toExactDisplay(String(q.answer)) : '';
+}
+
 async function showPracticeSteps() {
   const q = practiceSession[practiceIdx];
+  if (!q) return; // defensive — session ended / lost
   const area = document.getElementById('quiz-steps-area');
   area.style.display = 'block';
   area.innerHTML = '<div class="shimmer-block"></div><div class="shimmer-block" style="width:75%"></div>';
+  // Lock the trigger button during the AI fetch. Without this, rapid clicks
+  // dispatched multiple concurrent requests (and multiple area.innerHTML
+  // overwrites), wasting quota and producing flickery UI. Re-enabled in the
+  // finally block so the user can still re-trigger if the request fails.
+  const stepsBtn = document.querySelector('.qa-steps');
+  if (stepsBtn) stepsBtn.disabled = true;
 
+  // Use the canonical-answer helper so multi-answer questions pass every
+  // accepted form (joined by " or ") to the AI, not `undefined`.
+  const canonicalAnswer = _canonicalAnswerForPrompt(q);
   const prompt = `Solve this step by step: "${q.question}"
-Answer: ${q.answer}
+Answer: ${canonicalAnswer}
 Give 4-6 clear steps. Reply ONLY as JSON array:
 [{"step":1,"math":"expression","explanation":"why","rule":"rule name"}]`;
 
@@ -13232,9 +14142,11 @@ Give 4-6 clear steps. Reply ONLY as JSON array:
     });
     renderAllMathIn(area);
   } catch(e) {
-    const fallbackExpl = q.explanation ? prettyMath(String(q.explanation)) : ('Solution: '+q.answer);
-    area.innerHTML = `<div class="step-item"><div class="step-n">1</div><div class="step-body"><div class="step-math" data-math="${escapeHtml(q.question + ' = ' + q.answer)}"></div><div class="step-why">${escapeHtml(fallbackExpl)}</div></div></div>`;
+    const fallbackExpl = q.explanation ? prettyMath(String(q.explanation)) : ('Solution: ' + canonicalAnswer);
+    area.innerHTML = `<div class="step-item"><div class="step-n">1</div><div class="step-body"><div class="step-math" data-math="${escapeHtml(q.question + ' = ' + canonicalAnswer)}"></div><div class="step-why">${escapeHtml(fallbackExpl)}</div></div></div>`;
     renderAllMathIn(area);
+  } finally {
+    if (stepsBtn) stepsBtn.disabled = false;
   }
 }
 
@@ -13288,6 +14200,13 @@ function quitPractice() {
   document.getElementById('quiz-area').style.display = 'none';
   document.getElementById('session-complete').style.display = 'none';
   document.getElementById('practice-setup').style.display = 'grid';
+  // Reset session-scoped state so a quitted-then-restarted flow doesn't see
+  // stale data. lifetime stats (practiceStats) intentionally stay — only
+  // the per-session counters / pointers are cleared. Not strictly needed
+  // (startPractice overwrites these), but defensive hygiene.
+  practiceSession = [];
+  practiceIdx = 0;
+  practiceSessionCorrect = 0;
 }
 
 // Local fallback problems when AI unavailable
