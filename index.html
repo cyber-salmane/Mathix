@@ -9279,15 +9279,18 @@ function prettyMath(s) {
   // Common simple fractions as single-glyph vulgar fractions for readability.
   const VF = { '1/2':'½','1/3':'⅓','2/3':'⅔','1/4':'¼','3/4':'¾','1/5':'⅕','2/5':'⅖','3/5':'⅗','4/5':'⅘','1/6':'⅙','5/6':'⅚','1/8':'⅛','3/8':'⅜','5/8':'⅝','7/8':'⅞' };
   out = out.replace(/(?<![\w.])([1-9])\s*\/\s*([1-9])(?![\w.])/g, (m,a,b) => VF[a+'/'+b] || m);
-  // x^2 / x^3 / ... → Unicode superscripts when exponent is a single digit
-  // and base is a letter or digit (avoids mangling 10^x where x is a name).
-  out = out.replace(/\^(-?\d)\b/g, (m, d) => _toSuperscript(d));
+  // x^N → Unicode superscripts when exponent is a (possibly multi-digit
+  // and/or negative) integer. The negative lookahead `(?!\.?\d)` rejects
+  // decimal exponents (e.g. "7^3.5" stays as-is) but ALLOWS the period
+  // that ends a sentence (e.g. "Simplify 7^3." → "Simplify 7³.") which
+  // the previous `(?![\w.])` lookahead was blocking.
+  out = out.replace(/\^(-?\d+)(?!\.?\d)/g, (m, d) => _toSuperscript(d));
   // sqrt(x) → √(x);  cbrt(x) → ∛(x). Keep the parens; clearer.
   out = out.replace(/\bsqrt\s*\(/g, '√(').replace(/\bcbrt\s*\(/g, '∛(');
   // Common operators / inequalities
   out = out.replace(/<=/g, '≤').replace(/>=/g, '≥').replace(/!=/g, '≠');
   out = out.replace(/(?<![<>=!])=>/g, '⇒');  // implication arrow when standalone
-  out = out.replace(/\*/g, '·');  // dot multiplication is more mathematical
+  out = out.replace(/\*/g, '×');  // multiplication sign — clearer / more readable than the middle dot in mixed prose+math text
   out = out.replace(/(\d)e(\+?\-?\d+)\b/g, (m,a,b) => a + ' × 10' + _toSuperscript(parseInt(b,10)));
   // Pi / Greek letters by name (whole-word only)
   out = out.replace(/\b(alpha|beta|gamma|delta|epsilon|theta|lambda|mu|pi|rho|sigma|tau|phi|omega|Alpha|Beta|Gamma|Delta|Theta|Lambda|Pi|Sigma|Phi|Omega)\b/g, (m,name) => _GREEK_MAP[name] || m);
@@ -12664,12 +12667,26 @@ function _normalizeNotationForDisplay(s) {
   text = text.replace(/\\langle\s*/g, '⟨').replace(/\s*\\rangle/g, '⟩');
   // \| → ‖  (double-bar norm / magnitude delimiter)
   text = text.replace(/\\\|/g, '‖');
+  // \cdot → ×   (cleaner / more recognizable multiplication symbol than
+  // the middle dot KaTeX/prettyMath would otherwise render)
+  text = text.replace(/\\cdot\b/g, '\\times ');
   // === ASCII → Unicode (for both rendering paths) ===
   // ||x|| → ‖x‖  (double-pipe magnitude → Unicode double-bar norm)
   text = text.replace(/\|\|\s*([^|]+?)\s*\|\|/g, '‖$1‖');
   // <a,b> → ⟨a, b⟩  (vector components — only when contents contain a
   // comma and look numeric/symbolic so we don't false-match inequalities).
   text = text.replace(/<\s*([^<>]*,[^<>]*)\s*>/g, '⟨$1⟩');
+  // === Exponent parens / braces around simple integer exponents ===
+  // "X^(N)" → "X^N"  and  "X^{N}" → "X^N" where N is an optionally-signed
+  // integer. This lets the prose-path (prettyMath) Unicode-superscript
+  // single-digit exponents AND prevents parser-syntax leakage like the
+  // visible "2^(-3)" / "4^{-6}" the user reported. The KaTeX path is
+  // unaffected by this — KaTeX accepts both "X^N" and "X^{N}" identically.
+  text = text.replace(/\^\s*\(\s*(-?\d+)\s*\)/g, '^$1');
+  text = text.replace(/\^\s*\{\s*(-?\d+)\s*\}/g, '^$1');
+  // Unicode middle-dot → multiplication sign (visual polish — the dot
+  // reads as a weak operator; × is the textbook standard).
+  text = text.replace(/·/g, '×');
   return text;
 }
 
@@ -12827,10 +12844,22 @@ async function startPractice() {
   btn.textContent = '⏳ Generating…';
   document.querySelector('.gen-btn').disabled = true;
 
+  // Difficulty calibration is INTENTIONAL — each level should feel
+  // qualitatively different, not just "bigger numbers" or "uglier values".
+  // EASY  = beginner-friendly: small clean numbers, one short reasoning step,
+  //         single concept, no edge cases, friendly notation.
+  // MEDIUM = high-school level: 2–3 steps, mixed representations
+  //         (fractions / decimals / radicals as appropriate), moderate
+  //         algebraic manipulation, one non-trivial decision.
+  // HARD  = conceptually challenging — deeper reasoning, multi-step solving,
+  //         a non-trivial concept or method choice. CRITICALLY: keep numbers
+  //         manageable. Do NOT fake difficulty by using large/ugly numbers,
+  //         excessive decimals, or arbitrary precision. The difficulty must
+  //         come from REASONING DEPTH, not arithmetic load.
   const diffDesc = {
-    easy: 'very simple, beginner level, using small whole numbers',
-    medium: 'moderate difficulty, for a high school student',
-    hard: 'challenging, university level, with complex values'
+    easy:   'EASY — beginner level. Small clean numbers, one short reasoning step, single concept, friendly notation. Avoid edge cases or tricky special situations.',
+    medium: 'MEDIUM — high-school level. Two or three reasoning steps, possibly mixed representations (fractions/decimals/radicals where appropriate), moderate manipulation. One non-trivial decision required.',
+    hard:   'HARD — challenging. Multi-step solving with a genuinely non-trivial concept or method choice. Conceptual depth, not arithmetic burden. Numbers must stay clean; do NOT fake difficulty by using large numbers or ugly decimals.'
   };
 
   // Per-topic instructions for the generator. EVERY topic-slug rendered as
@@ -12843,14 +12872,14 @@ async function startPractice() {
     fractions:                'fraction arithmetic — adding, subtracting, multiplying, dividing simple fractions. ANSWERS MUST BE IN FULLY-SIMPLIFIED FRACTION FORM (e.g. "5/6", "1/2", "7/4"). Always reduce: never emit "4/6" when "2/3" is the simplified equivalent. Never use decimal approximations like "0.83" for "5/6". Fractions taught with fractions, always.',
     decimals:                 'decimal arithmetic — adding, subtracting, multiplying, dividing decimal numbers (e.g. "0.25 + 0.5"). Answers in decimal form.',
     percentages:              'percentage word-style problems. The question MUST be a complete English sentence containing the word "percent" or the symbol "%". Examples: "What is 25% of 80?", "10 is what percent of 50?", "If a price increases from $40 to $50, what is the percent increase?". The answer is the numeric result (with or without %). NEVER emit a question that is just a bare number or symbol with no sentence — that is invalid.',
-    exponents:                'exponent rules and simplification (e.g. 2^3, (a^m)^n, negative exponents, scientific notation)',
+    exponents:                'exponent rules and simplification (e.g. 2^3, (a^m)^n, negative exponents, scientific notation). ANSWER STRINGS MUST USE PLAIN EXPONENT SYNTAX: write "7^8" not "7^{8}", write "4^-6" not "4^{-6}". The math validator parses standard math expressions; LaTeX brace syntax (^{N}) breaks parsing and causes correct answers to be marked wrong.',
     algebra:                  'linear equations with one variable (e.g. 2x + 3 = 11) — solve for x',
     quadratic:                'quadratic equations with two real roots (e.g. x^2 - 5x + 6 = 0). Use the expectedAnswers field to list BOTH roots (e.g. "expectedAnswers": ["2", "3"]).',
     functions:                'function evaluation: given f(x) = some expression, compute f(a) for a specific value of a. Question should be like "If f(x) = 2x + 3, find f(5)". NEVER emit expressions that involve division by zero or undefined operations.',
     'systems-of-equations':   'systems of TWO linear equations in two unknowns (x and y). Question should present both equations clearly, e.g. "Solve: 2x + y = 7, x - y = 2". The answer is the unique solution pair (x, y) — format as "x=3, y=1" or as a pair like "(3, 1)".',
     geometry:                 'Geometry problems with EXPLICIT geometric context — must reference shapes (triangle, circle, rectangle, square, cube, cylinder, sphere, etc.) OR a named geometric quantity (area, perimeter, volume, hypotenuse, radius, diameter, circumference). NEVER emit bare arithmetic like "9 - 3" or "3²" disguised as geometry. Questions should be a complete sentence (e.g. "Find the area of a triangle with base 6 and height 4", "A right triangle has legs 2 and 5. Find the hypotenuse c."). ANSWERS MUST USE EXACT SYMBOLIC FORM whenever the value is irrational: "√29" not "5.3851648"; "256π/3" or "\\frac{256\\pi}{3}" not "268.082573"; "48π" not "150.7963"; "16π" not "50.265". Decimal-only answers are acceptable only when the value is rational (e.g. area = 12, perimeter = 24).',
     trigonometry:             'trigonometric values and identities (sin, cos, tan at standard angles 0°, 30°, 45°, 60°, 90°)',
-    vectors:                  '2D vector operations — addition, subtraction, scalar multiplication, magnitude, or dot product. Use standard LaTeX notation in the question text: \\langle 3, 4 \\rangle for vector components and \\| v \\| for magnitude. Examples: "Find the magnitude of \\langle 3, 4 \\rangle", "Compute 2\\langle 1, 2 \\rangle + \\langle 3, -1 \\rangle", "Find the dot product of \\langle 1, 2 \\rangle and \\langle 3, 4 \\rangle". MAGNITUDE ANSWERS MUST STAY IN EXACT RADICAL FORM (e.g. "√13", "\\sqrt{29}") — never decimal approximations like "3.605551". Vector-result answers should be in component form: "⟨a, b⟩" or "<a, b>".',
+    vectors:                  '2D vector operations — addition, subtraction, scalar multiplication, magnitude, or dot product. USE PLAIN ASCII NOTATION in the question text (the display layer auto-converts to proper math typography — do NOT use LaTeX backslashes which break JSON escaping): write "<3, 4>" for vector components and "||v||" for magnitude. Examples: "Find the magnitude of <3, 4>", "Compute 2<1, 2> + <3, -1>", "Find the dot product of <1, 2> and <3, 4>". MAGNITUDE ANSWERS MUST STAY IN EXACT RADICAL FORM, written as plain ASCII: "sqrt(13)" or "√13" — never decimal approximations like "3.605551". Vector-result answers in component form: "<a, b>".',
     limits:                   'simple limits of polynomial or rational expressions as x approaches a finite value (avoid 0/0 indeterminate forms unless they simplify cleanly)',
     'calculus-derivatives':   'derivatives using power rule, chain rule, or product rule — answer is the derivative expression',
     'calculus-integrals':     'basic indefinite integrals — answer is the antiderivative + C (omit + C in the answer field for simplicity)',
@@ -12870,30 +12899,57 @@ async function startPractice() {
   // into the prompt and produce nonsense output. This is a belt-and-
   // suspenders guard — every slug should be in topicDesc above.
   const topicInstruction = topicDesc[practiceTopic] || practiceTopic.replace(/-/g, ' ');
-  const prompt = `Generate ${practiceQty} unique math practice problems strictly about ${topicInstruction}.
-Difficulty: ${diffDesc[practiceDiff]}.
+  const prompt = `Generate ${practiceQty} math practice problems strictly about: ${topicInstruction}
 
-MANDATORY RULES — generation MUST follow ALL of these:
-- Every problem must be strictly about the topic above. No cross-topic drift.
-- Each problem must have a clean, exact, finite answer (integer or simple fraction or decimal).
-- NEVER use division by zero. Reject any expression of the form X/0, X÷0, or anything that evaluates to undefined / infinity / NaN.
-- NEVER produce "undefined", "infinity", "no solution", "DNE", "impossible", or empty as the answer.
-- NEVER produce malformed notation (mismatched brackets, dangling operators, incomplete fractions).
-- Problems must be mathematically valid and solvable using standard arithmetic / algebra.
-- Problems should be varied, not repetitive.
-- No word problems — pure math notation only.
-- Answers should be verifiable by a calculator.
-- For quadratic / equation problems with two roots, set the answer to one root and list both roots in expectedAnswers (see schema below).
+DIFFICULTY: ${diffDesc[practiceDiff]}
+
+═══ MANDATORY RULES ═══
+
+TOPIC INTEGRITY:
+- Every problem must be strictly about the topic above. Zero cross-topic drift.
+- For word-style topics (percentages, geometry, probability, sequences, systems, vectors): the question MUST be a complete English sentence describing a meaningful task. NEVER emit a bare expression or isolated number as a question.
+
+MATHEMATICAL VALIDITY:
+- The answer must be exact, finite, and clean. No division by zero anywhere — reject X/0, X÷0, or any expression that evaluates to undefined/infinity/NaN.
+- Brackets must match. No dangling operators or incomplete fractions.
+- NEVER produce "undefined", "infinity", "no solution", "DNE", "impossible", or empty answers. Regenerate the problem instead.
+
+EXACT-FORM DISCIPLINE (the educational quality rule):
+- Answers stay in canonical mathematical form whenever the natural value is irrational:
+  • √13, not 3.6055
+  • 48π, not 150.7963
+  • 256π/3, not 268.0826
+  • 5/6, not 0.833...
+  • 1/12, not 0.0833
+- Fractions MUST be fully simplified. Never emit 4/6 when 2/3 is the equivalent. Never emit 2/4 when 1/2 is the equivalent.
+- Use decimal form only when the answer is naturally rational and short (e.g. area = 12, perimeter = 24, P(heads) = 1/2 ⇒ 0.5 is also fine).
+
+EDUCATIONAL COHERENCE:
+- question, answer, hint, and explanation must use the SAME notation style. If the answer is 48π, the hint and explanation should say "48π" too — never silently switch to "150.80" in the explanation.
+- The HINT should suggest the SOLVING APPROACH ("Find a common denominator", "Use V = (4/3)πr³", "Apply the difference of squares"). It must NOT restate the answer.
+- The EXPLANATION should briefly justify WHY that approach works or what concept is being applied. Not just a step-by-step restatement.
+
+DIVERSITY ACROSS THE BATCH (this matters):
+- Vary the structure, phrasing, values, and scenario across the ${practiceQty} problems. Never reuse the same template with only numbers changed.
+- For scenario-driven topics (probability, percentages, geometry word problems): use DIFFERENT scenarios each time — coins, dice, cards, marbles, spinners, percent of, percent increase, percent decrease, different shapes, different operations, etc.
+- Don't make every answer the same form (e.g. don't make all 5 answers be 1/2; don't make all 5 be integers).
+
+MULTI-ANSWER PROBLEMS:
+- For problems with multiple genuinely distinct mathematical solutions (e.g. quadratics with two real roots, x² = 9 ⇒ x = 3 or x = −3), set "answer" to one canonical solution and list all distinct solutions in "expectedAnswers".
+- expectedAnswers MUST contain ONLY mathematically DISTINCT solutions. Do NOT list two textual forms of the same value (e.g. "6π" and "6*pi" — those are the same solution; the validator already accepts both forms regardless).
 ${recentText}
 
-Reply ONLY with a JSON array, no markdown, no backticks. Each item uses this schema:
+═══ OUTPUT FORMAT ═══
+
+Reply ONLY with a JSON array — no markdown, no backticks, no preamble. Each item uses this schema:
+
 [
   {
     "question": "the math problem as text",
-    "answer": "exact primary answer (single value)",
-    "expectedAnswers": ["alt form 1", "alt form 2"],   // OPTIONAL — include only when multiple valid answers exist (e.g. quadratic with two real roots). Omit entirely for single-answer problems.
-    "hint": "one-sentence hint if stuck",
-    "explanation": "brief solution method"
+    "answer": "exact canonical answer (single value, in the form a student should write)",
+    "expectedAnswers": ["root1", "root2"],   // OPTIONAL. Include ONLY for multi-solution problems. Two or more DISTINCT mathematical solutions. Omit entirely for single-answer problems.
+    "hint": "one-sentence guidance toward the solving APPROACH (never restates the answer)",
+    "explanation": "one-or-two-sentence justification of why the approach works or what concept applies"
   }
 ]`;
 
@@ -12901,7 +12957,7 @@ Reply ONLY with a JSON array, no markdown, no backticks. Each item uses this sch
     const text = await callAI(
       [{ role: 'user', content: prompt }],
       2000,
-      'You are a math teacher generating practice problems. Always respond with valid JSON array only. No extra text.',
+      'You are an experienced math teacher building a high-quality practice session. Produce educationally coherent problems with exact-form answers, varied across the batch. Hints must guide the solving approach; explanations must justify why the approach works; both must use the same notation style as the answer. Respond with a valid JSON array only — no extra text, no markdown, no preamble.',
       { channel: 'practice-gen', cache: false }
     );
     const clean = text.replace(/```json|```/g,'').trim();
@@ -13291,8 +13347,22 @@ function _normAns(s) {
     .replace(/−|–|—/g, '-')
     .replace(/π/g, 'pi')
     .replace(/√/g, 'sqrt')
-    .replace(/²/g, '^2').replace(/³/g, '^3')
-    .replace(/⁴/g, '^4').replace(/⁵/g, '^5')
+    // Unicode superscript digits → ASCII ^N. ALL ten plus the superscript
+    // minus sign and the superscript parens, so users typing `9⁸` or `2⁻³`
+    // via keyboard / OS input get validated correctly (previously only
+    // ²³⁴⁵ were handled, so `9⁸` against expected `9^8` was being marked
+    // wrong because math.evaluate('9⁸') throws).
+    // Pattern: base (digit or closing paren) followed by optional superscript
+    // sign and one-or-more superscript digits. Allows `4⁻⁶` where the `⁻`
+    // appears BEFORE the digits, not just between groups.
+    .replace(/(\d|\))([⁻⁺]?[⁰¹²³⁴⁵⁶⁷⁸⁹]+)/g, (m, base, sup) => base + '^(' + sup
+      .replace(/⁰/g,'0').replace(/¹/g,'1').replace(/²/g,'2').replace(/³/g,'3')
+      .replace(/⁴/g,'4').replace(/⁵/g,'5').replace(/⁶/g,'6').replace(/⁷/g,'7')
+      .replace(/⁸/g,'8').replace(/⁹/g,'9').replace(/⁻/g,'-').replace(/⁺/g,'+') + ')')
+    // Lone superscripts (no base) — convert digits in place for symmetry
+    .replace(/⁰/g, '^0').replace(/¹/g, '^1').replace(/²/g, '^2').replace(/³/g, '^3')
+    .replace(/⁴/g, '^4').replace(/⁵/g, '^5').replace(/⁶/g, '^6').replace(/⁷/g, '^7')
+    .replace(/⁸/g, '^8').replace(/⁹/g, '^9')
     .replace(/\bln\b/g, 'log')
     // Drop trailing equal sign that some users type at the end.
     .replace(/=+$/, '');
@@ -13492,6 +13562,15 @@ function _unwrapLatex(s) {
   if (text.indexOf('\\') >= 0) {
     try { text = latexToText(text) || text; } catch(_) {}
   }
+  // Braced exponents WITHOUT backslashes: the AI sometimes emits the
+  // canonical answer as "7^{8}" or "4^{-6}" using LaTeX brace syntax (which
+  // KaTeX renders perfectly), but math.js can't parse `{`/`}` and would
+  // throw, leading to false-wrong verdicts. _unwrapLatex's backslash gate
+  // (designed to skip the full latexToText pipeline when the input is
+  // already clean) would normally bypass these. Convert the brace pair to
+  // parens here unconditionally — cheap, idiomatic, and only catches the
+  // specific exponent-brace shape (won't affect non-exponent braces).
+  text = text.replace(/\^\s*\{\s*([^{}]+?)\s*\}/g, '^($1)');
   return text;
 }
 // Pure-JS, math.js-independent numeric parser. Accepts the common forms
@@ -13912,8 +13991,17 @@ function _roundNice(value) {
   if (!isFinite(value)) return String(value);
   if (Math.abs(value - Math.round(value)) < 1e-9) return String(Math.round(value));
   const absVal = Math.abs(value);
-  const decimals = absVal >= 1 ? 2 : 4;
-  return value.toFixed(decimals);
+  if (absVal >= 1) {
+    // 2 decimals, KEEP trailing zeros (textbook convention: "150.80" reads
+    // as "rounded to 2 decimal places" and matches the user-spec examples).
+    return value.toFixed(2);
+  }
+  // < 1: 4 decimals, but strip trailing zeros so an exact value like 0.5
+  // shows as "0.5" rather than the visually odd "0.5000".
+  let result = value.toFixed(4);
+  result = result.replace(/(\.\d*?)0+$/, '$1');
+  if (result.endsWith('.')) result = result.slice(0, -1);
+  return result;
 }
 
 // Detect a π-rational form. Returns LaTeX like "\\frac{256\\pi}{3}", "48\\pi",
@@ -13921,13 +14009,17 @@ function _roundNice(value) {
 // keeping the smallest-denominator hit.
 function _detectPiForm(num) {
   const PI = Math.PI;
-  const tol = 1e-5;
+  // Tolerance is generous enough to absorb AI-emitted truncated decimals
+  // (e.g. "150.7963394347" for 48π loses precision after 10 digits and is
+  // off by ~3e-5 from the true value of ratio=48). 1e-4 still rejects
+  // accidental near-matches.
+  const tol = 1e-4;
   const ratio = num / PI;
   for (let q = 1; q <= 12; q++) {
     const p = Math.round(ratio * q);
     if (p === 0) continue;
     if (Math.abs(ratio - p / q) > tol) continue;
-    if (Math.abs(p) > 200) continue; // skip ugly numerators
+    if (Math.abs(p) > 500) continue; // skip ugly numerators (must allow 256π/3 etc.)
     const g = _gcd(Math.abs(p), q);
     const np = p / g, nq = q / g;
     if (nq === 1 && Math.abs(np) === 1) return np < 0 ? '-\\pi' : '\\pi';
@@ -13942,12 +14034,18 @@ function _detectPiForm(num) {
 // like "\\sqrt{13}", "2\\sqrt{3}", or null. Negative inputs return null.
 function _detectRadicalForm(num) {
   if (num <= 0) return null;
-  const tol = 1e-5;
+  // Same generous tolerance as _detectPiForm for the same reason — AI-emitted
+  // truncated decimals for irrationals are common (e.g. "3.6055" for √13).
+  const tol = 1e-4;
   // First: bare √n where num² is an integer that isn't a perfect square.
+  // Bound n ≤ 200 — beyond that, the symbolic form is no more elegant than
+  // the decimal (e.g. √71868 ≈ 268.08 is technically correct but reads as
+  // less educational than just showing the decimal, and worse than the
+  // π-form 256π/3 which the π-detector should catch first).
   const sq = num * num;
   if (Math.abs(sq - Math.round(sq)) < tol * Math.max(1, sq)) {
     const n = Math.round(sq);
-    if (n >= 2) {
+    if (n >= 2 && n <= 200) {
       const sqrtN = Math.sqrt(n);
       if (Math.abs(sqrtN - Math.round(sqrtN)) > 1e-6) {
         return `\\sqrt{${n}}`;
@@ -14115,16 +14213,27 @@ async function showPracticeSteps() {
   // Use the canonical-answer helper so multi-answer questions pass every
   // accepted form (joined by " or ") to the AI, not `undefined`.
   const canonicalAnswer = _canonicalAnswerForPrompt(q);
-  const prompt = `Solve this step by step: "${q.question}"
-Answer: ${canonicalAnswer}
-Give 4-6 clear steps. Reply ONLY as JSON array:
-[{"step":1,"math":"expression","explanation":"why","rule":"rule name"}]`;
+  const prompt = `Walk through the solution to this practice problem.
+
+Problem: "${q.question}"
+Final answer: ${canonicalAnswer}
+
+REQUIREMENTS:
+- Produce 4 to 6 clear steps that a student can follow.
+- Each step's "math" field is the expression at that stage, written in standard mathematical notation.
+- Keep the NOTATION CONSISTENT with the final answer throughout. If the answer is in exact form (radicals, π, fractions), the steps must also stay in exact form — never drift to ugly decimals mid-explanation.
+- Each step's "explanation" must say WHY this step is taken (the concept or rule applied), not just restate the operation. One short sentence per step.
+- "rule" should name the specific concept (e.g. "Power rule", "Common denominator", "Difference of squares", "Pythagorean theorem"). Keep it brief.
+- The first step should set up the problem; the final step should arrive at the answer.
+
+Reply ONLY as a JSON array — no markdown, no preamble:
+[{"step":1,"math":"expression","explanation":"why this step","rule":"concept name"}]`;
 
   try {
     const text = await callAI(
       [{ role: 'user', content: prompt }],
       800,
-      'Math tutor. JSON only, no markdown.',
+      'You are a math tutor explaining a solution to a student. Use clear, educational reasoning. Keep the same exact-form notation as the final answer throughout. Reply with valid JSON only — no markdown, no preamble.',
       { channel: 'practice-steps' }
     );
     const steps = JSON.parse(text.replace(/```json|```/g,'').trim());
@@ -14401,6 +14510,33 @@ function getFallbackProblems(topic, diff, qty) {
       hard:[
         {question:'∫ x·e^x dx',answer:'e^x(x-1) + C',hint:'Integration by parts: u=x, dv=e^x dx',explanation:'xe^x - e^x + C'},
         {question:'∫ sin²(x) dx',answer:'x/2 - sin(2x)/4 + C',hint:'Use identity: sin²=½(1-cos2x)',explanation:'half-angle formula'},
+      ],
+    },
+    // Vectors fallback bank — was missing entirely, which is why selecting
+    // Vectors and falling back to local (when AI failed for any reason) was
+    // serving algebra problems via the `banks[topic] || banks.algebra` default.
+    // All questions use plain ASCII vector notation; the display layer
+    // converts <a,b> → ⟨a,b⟩ automatically via _normalizeNotationForDisplay.
+    vectors:{
+      easy:[
+        {question:'Find the magnitude of <3, 4>',answer:'5',hint:'Magnitude = sqrt(a² + b²)',explanation:'sqrt(9+16) = sqrt(25) = 5'},
+        {question:'Compute <1, 2> + <3, 4>',answer:'<4, 6>',hint:'Add components separately',explanation:'(1+3, 2+4) = (4, 6)'},
+        {question:'Compute 2<3, -1>',answer:'<6, -2>',hint:'Scalar multiplication: scale each component',explanation:'(2·3, 2·-1) = (6, -2)'},
+        {question:'Find the magnitude of <0, 5>',answer:'5',hint:'sqrt(a² + b²)',explanation:'sqrt(0+25) = 5'},
+        {question:'Compute <5, -3> - <2, 1>',answer:'<3, -4>',hint:'Subtract components separately',explanation:'(5-2, -3-1) = (3, -4)'},
+      ],
+      medium:[
+        {question:'Find the magnitude of <3, -4>',answer:'5',hint:'Magnitude = sqrt(a² + b²)',explanation:'sqrt(9+16) = sqrt(25) = 5'},
+        {question:'Compute the dot product of <1, 2> and <3, 4>',answer:'11',hint:'Dot = a₁·a₂ + b₁·b₂',explanation:'1·3 + 2·4 = 3 + 8 = 11'},
+        {question:'Find the magnitude of <5, 12>',answer:'13',hint:'sqrt(a² + b²)',explanation:'sqrt(25+144) = sqrt(169) = 13'},
+        {question:'Compute 3<2, 1> - 2<1, 3>',answer:'<4, -3>',hint:'Distribute the scalars first',explanation:'<6,3> - <2,6> = <4,-3>'},
+        {question:'Compute the dot product of <2, -1> and <3, 4>',answer:'2',hint:'a₁·a₂ + b₁·b₂',explanation:'2·3 + (-1)·4 = 6 - 4 = 2'},
+      ],
+      hard:[
+        {question:'Find the magnitude of <2, 3>',answer:'sqrt(13)',hint:'Keep magnitudes in exact radical form',explanation:'sqrt(4+9) = sqrt(13)'},
+        {question:'Find the magnitude of <-1, 5>',answer:'sqrt(26)',hint:'sqrt(a² + b²) — keep radical form',explanation:'sqrt(1+25) = sqrt(26)'},
+        {question:'Compute the dot product of <-2, 3> and <4, 1>',answer:'-5',hint:'a₁·a₂ + b₁·b₂',explanation:'-8 + 3 = -5'},
+        {question:'Find the magnitude of <-3, -4>',answer:'5',hint:'Negative components still square to positive',explanation:'sqrt(9+16) = 5'},
       ],
     },
   };
