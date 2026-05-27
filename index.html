@@ -112,7 +112,11 @@ html[data-accent="gold"]{ --accent:#f59e0b; --accent2:#fbbf24; --accent3:#fcd34d
 }
 .settings-overlay.open{opacity:1;pointer-events:auto}
 .settings-panel{
-  position:fixed;top:0;right:0;height:100vh;width:380px;max-width:90vw;
+  position:fixed;top:0;right:0;
+  /* Use dynamic viewport height where supported so iOS Safari's chrome toggling
+     doesn't leave a dead strip at the bottom of the drawer. Falls back to 100vh. */
+  height:100vh;height:100dvh;
+  width:380px;max-width:90vw;
   background:var(--s1);border-left:1px solid var(--border2);
   z-index:999;transform:translateX(100%);transition:transform .3s cubic-bezier(.4,0,.2,1);
   display:flex;flex-direction:column;overflow:hidden;
@@ -614,26 +618,63 @@ math-field .ML__error{
   .mf-quick > button{min-width:38px;height:32px;font-size:13px}
 }
 
-/* Mobile bottom navigation — visible only ≤700px. Sticky to the bottom with safe-area padding. */
+/* Mobile bottom navigation — visible only ≤700px. Sticky to the bottom with safe-area padding.
+   Holds 7 tabs (Calc, Graph, Practice, Solver, Convert, Scan, Formulas). On phones 380px and up
+   all 7 fit comfortably in a row; on narrower phones the row scrolls horizontally with snap so
+   no tab is ever unreachable. */
 .mobile-nav{
   display:none;position:fixed;left:0;right:0;bottom:0;z-index:90;
-  background:rgba(8,8,26,0.92);backdrop-filter:blur(16px);
+  background:rgba(8,8,26,0.92);backdrop-filter:blur(16px);-webkit-backdrop-filter:blur(16px);
   border-top:1px solid var(--border2);
-  padding:6px 8px calc(6px + env(safe-area-inset-bottom, 0px));
-  justify-content:space-around;align-items:stretch;gap:2px;
+  padding:4px 4px calc(4px + env(safe-area-inset-bottom, 0px));
+  align-items:stretch;gap:2px;
+  /* Allow horizontal scroll for tight viewports. Snap to each tab so flicks land cleanly. */
+  overflow-x:auto;overflow-y:hidden;
+  -webkit-overflow-scrolling:touch;
+  scroll-snap-type:x mandatory;
+  scrollbar-width:none;
 }
+.mobile-nav::-webkit-scrollbar{display:none}
 .mnav-btn{
-  flex:1;min-width:0;background:transparent;border:none;cursor:pointer;
+  flex:1 0 auto;min-width:56px;background:transparent;border:none;cursor:pointer;
   display:flex;flex-direction:column;align-items:center;justify-content:center;
-  gap:2px;padding:10px 4px;border-radius:10px;min-height:52px;
+  gap:3px;padding:8px 6px;border-radius:10px;min-height:54px;
   color:var(--text3);font-family:var(--sans);transition:color .15s,background .15s;
+  scroll-snap-align:center;
+  /* Prevent iOS long-press menu / text selection on rapid taps. */
+  -webkit-tap-highlight-color:transparent;-webkit-touch-callout:none;
 }
 .mnav-btn:active{background:var(--s2)}
 .mnav-btn:hover{background:var(--s2);color:var(--text2)}
-.mnav-btn.on{color:var(--accent2)}
-.mnav-btn.on .mnav-icon{transform:scale(1.1);text-shadow:0 0 12px rgba(124,93,249,.6)}
-.mnav-icon{font-size:18px;font-family:var(--mono);transition:transform .2s,text-shadow .2s}
-.mnav-label{font-size:10px;font-weight:600;letter-spacing:.02em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:100%}
+.mnav-btn.on{color:var(--accent2);background:rgba(124,93,249,.10)}
+.mnav-btn.on .mnav-icon{transform:scale(1.15);text-shadow:0 0 14px rgba(124,93,249,.7)}
+.mnav-btn.on .mnav-label{font-weight:700}
+/* Active-tab indicator strip — subtle gradient bar above the active button so
+   "where you are" reads at a glance, premium-feel without being shouty. */
+.mnav-btn.on::before{
+  content:"";position:absolute;top:1px;left:18%;right:18%;height:2px;
+  background:linear-gradient(90deg, transparent, var(--accent2), transparent);
+  border-radius:2px;
+}
+.mnav-btn{position:relative}
+/* Practice tab — flagship status. Always tinted gold (the desktop signature),
+   bumped up a notch when active so it dominates as the "go practice" CTA. */
+.mnav-btn.mnav-practice{color:var(--gold2)}
+.mnav-btn.mnav-practice .mnav-icon{filter:drop-shadow(0 0 6px rgba(245,158,11,.35))}
+.mnav-btn.mnav-practice.on{color:#fff;background:linear-gradient(180deg, rgba(245,158,11,.18), rgba(124,93,249,.12))}
+.mnav-btn.mnav-practice.on .mnav-icon{text-shadow:0 0 14px rgba(245,158,11,.75);filter:drop-shadow(0 0 10px rgba(245,158,11,.6))}
+.mnav-btn.mnav-practice.on::before{background:linear-gradient(90deg, transparent, var(--gold2), transparent)}
+.mnav-icon{font-size:19px;font-family:var(--mono);transition:transform .2s,text-shadow .2s,filter .2s;line-height:1}
+.mnav-label{font-size:10.5px;font-weight:600;letter-spacing:.01em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:100%;line-height:1.15}
+/* When the MathLive virtual keyboard is up, slide the mobile nav out of the way.
+   It would otherwise float in a strip between the keyboard and the page, which
+   looks broken. A short transform-only transition keeps it cheap on mobile GPUs. */
+body.mlive-kb-up .mobile-nav{
+  transform:translateY(120%);
+  pointer-events:none;
+  transition:transform .22s ease;
+}
+.mobile-nav{transition:transform .22s ease}
 @media(max-width:700px){
   .mobile-nav{display:flex}
   .nav{display:none !important}              /* hide top nav on mobile, bottom takes over */
@@ -1086,7 +1127,10 @@ body{
   background:var(--bg);
   color:var(--text);
   font-family:var(--sans);
-  min-height:100vh;
+  /* 100dvh adapts as the iOS Safari URL bar shows/hides — prevents the page
+     from "growing past the screen" when the bar collapses. Falls back to vh
+     for browsers without dvh support. */
+  min-height:100vh;min-height:100dvh;
   overflow-x:hidden;
 }
 
@@ -1288,12 +1332,12 @@ header{
 
 /* ── COMPREHENSIVE MOBILE ── */
 @media(max-width:600px){
-  .app{padding:0 10px 80px}
-  header{flex-wrap:wrap;gap:10px;align-items:center;padding:14px 0 12px;position:relative}
-  .settings-gear{position:absolute;top:14px;right:0;margin-left:0}
-  .nav{width:100%;overflow-x:auto;-webkit-overflow-scrolling:touch;scrollbar-width:none;gap:2px;padding:4px 6px;order:3}
-  .nav::-webkit-scrollbar{display:none}
-  .nav-btn{font-size:11px;padding:5px 10px;white-space:nowrap;flex-shrink:0}
+  /* Side padding only. Bottom padding for the mobile bar is set at ≤700px
+     (line further up) with safe-area awareness; do NOT override it here.
+     Header positioning is also handled at ≤700px (position:static + margin-left:auto
+     on the gear) — duplicating it here would cascade-conflict, so leave it alone. */
+  .app{padding-left:10px;padding-right:10px}
+  /* Top .nav is hidden at ≤700px (display:none !important); no need to style it here. */
   .logo-sub{display:none}
   .hero{padding:6px 0 16px}
   .hero h1{font-size:24px;letter-spacing:-.5px}
@@ -1307,22 +1351,38 @@ header{
   .kbd{padding:8px 8px 12px}
   .fn-modes{gap:3px}
   .fm{font-size:9px;padding:3px 7px;letter-spacing:0}
-  #fn-row{grid-template-columns:repeat(5,1fr);gap:3px;margin-bottom:5px}
-  .btn{padding:11px 2px;font-size:11px;border-radius:8px}
-  .kb{gap:3px}
-  .action-row{gap:4px}
-  .act-btn{font-size:10px;padding:9px 4px}
+  #fn-row{grid-template-columns:repeat(5,1fr);gap:4px;margin-bottom:6px}
+  /* Touch-comfortable keypad: 14px vertical padding lands buttons at ~40px tall
+     within the dense 5-col grid — close to the 44px HIG floor without stretching
+     the keypad past the fold. */
+  .btn{padding:14px 2px;font-size:12px;border-radius:9px;min-height:42px}
+  .btn.eq{font-size:18px}
+  .kb{gap:4px}
+  .action-row{gap:5px}
+  .act-btn{font-size:11px;padding:11px 4px;min-height:44px}
   .steps-card{min-height:200px}
   .detail-tabs{padding:8px 12px 6px;gap:4px}
   .dt{font-size:10px;padding:4px}
   .steps-body{padding:10px 12px}
   .step-math{font-size:12px;padding:6px 10px}
   .step-why{font-size:11px}
-  .chat-msgs{max-height:140px;padding:10px 12px}
-  .chat-foot{padding:8px 10px}
-  #ci{font-size:12px;padding:7px 10px}
+  .chat-msgs{max-height:240px;padding:12px 14px;min-height:120px}
+  .chat-foot{padding:10px 12px;gap:8px}
+  #ci{font-size:16px;padding:11px 14px;min-height:44px}  /* >=16px avoids iOS zoom-on-focus */
+  .send-btn{width:44px;height:44px;font-size:18px;flex-shrink:0}
+  .bubble{font-size:13.5px;line-height:1.55;max-width:88%}
   .graph-layout{grid-template-columns:1fr}
-  .graph-canvas-wrap{height:300px}
+  /* Canvas height — a touch taller so the gridlines + readout don't feel cramped. */
+  .graph-canvas-wrap{height:340px;padding:10px}
+  /* Graph control buttons must be tappable. The 24-30px sizes are desktop-only. */
+  .fn-del,.fn-hidden-toggle{width:32px;height:32px;font-size:14px}
+  .fn-color{width:18px;height:18px}
+  .g-tool-btn{width:36px;height:36px;font-size:15px}
+  .fn-input{font-size:14px;padding:10px 12px}
+  .fn-input-wrap{gap:6px;margin-bottom:7px}
+  .graph-quick-btn{min-width:36px;height:34px;font-size:13px;padding:0 9px}
+  .graph-quick{gap:5px;padding:7px}
+  .g-btn{padding:11px 14px;font-size:13px;min-height:42px}
   .solver-input{font-size:13px;padding:10px 12px}
   .conv-grid{grid-template-columns:1fr}
   .topic-grid{grid-template-columns:repeat(auto-fill,minmax(96px,1fr));gap:6px}
@@ -1331,13 +1391,25 @@ header{
   .topic-group{margin-bottom:10px}
   .topic-group-label{font-size:11px}
   .quiz-input-row{flex-direction:column;gap:10px}
-  .quiz-check-btn{width:100%;padding:14px;font-size:15px}
-  .quiz-card{padding:18px 14px}
-  .quiz-question{font-size:16px;margin-bottom:16px}
-  .quiz-input{font-size:16px;padding:14px 14px}  /* >=16px avoids iOS zoom-on-focus */
-  .qa-btn{flex:1;min-height:44px;font-size:13px;padding:11px 14px}
+  .quiz-check-btn{width:100%;padding:14px;font-size:15px;min-height:48px}
+  .quiz-card{padding:16px 14px;margin-bottom:10px}
+  .quiz-question{font-size:16px;margin-bottom:14px;line-height:1.45}
+  .quiz-input{font-size:16px;padding:13px 14px;min-height:48px}  /* >=16px avoids iOS zoom-on-focus */
+  .quiz-input-stack{gap:8px}
+  .quiz-input-stack .quiz-input{min-height:48px}
+  /* Multi-slot mode: math-field within a stack on mobile gets the same touch height. */
+  .quiz-input-stack math-field{min-height:54px}
+  .quiz-slot-sep{padding:4px 0;font-size:11px;color:var(--text2)}
+  .quiz-feedback{padding:11px 14px;font-size:13.5px;line-height:1.55;margin-top:12px}
+  .quiz-steps-area{margin-top:12px;padding-top:14px}
+  .qa-btn{flex:1 1 calc(50% - 4px);min-height:46px;font-size:13px;padding:11px 12px;min-width:0}
+  .quiz-actions{gap:8px;margin-top:12px}
   .qa-next{order:2}
-  .quit-btn{margin-top:14px}
+  .quit-btn{margin-top:14px;min-height:44px}
+  .quiz-topic-tag{margin-bottom:10px}
+  .quiz-multi-hint{display:block;margin-left:0;margin-top:6px;font-size:10.5px}
+  .quiz-progress-bar{margin-bottom:10px}
+  .quiz-counter{margin-bottom:10px;font-size:11.5px}
   .diff-row{gap:5px}
   .diff-btn{font-size:12px;padding:10px 4px;min-height:44px}
   .practice-setup{gap:10px;margin-bottom:14px}
@@ -1350,12 +1422,64 @@ header{
   .qty-row{gap:5px}
   .card-head,.chead{padding:10px 12px}
   /* Function reference toolbar shouldn't dominate the calc card on narrow phones. */
-  .fn-ref-search{flex:1 1 100%}
+  .fn-ref-search{flex:1 1 100%;font-size:16px}  /* 16px avoids iOS zoom */
   .fn-ref-cats{justify-content:flex-start}
+  /* Modal/dialog tightening — 32px padding is desktop comfort, mobile needs less. */
+  .modal{padding:22px 18px;width:100%;max-width:calc(100vw - 24px)}
+  .modal h3{font-size:17px}
+  .modal input{font-size:16px;padding:12px 14px;min-height:48px}  /* 16px avoids iOS zoom */
+  .modal-close{padding:4px 10px;font-size:24px;line-height:1;margin-top:-8px;margin-right:-4px}
+  .mbtn{padding:11px 18px;min-height:44px;font-size:14px}
+  /* Settings panel: scrollable interior; padding-bottom for safe-area on landscape iPhones. */
+  .settings-body{padding-bottom:max(20px, calc(20px + env(safe-area-inset-bottom, 0px)))}
   /* Tab/page transitions: no fade if user prefers reduced motion (handled
      globally) but also speed it up on mobile for snappier nav. */
   .page{animation-duration:.28s}
+  /* Background performance: orb blurs at 140px are full-screen composite layers
+     and animate continuously. On phones this can chew GPU. Smaller blur radii
+     + halt the animation when scrolling so we never drop frames during input. */
+  .orb{filter:blur(80px);animation-play-state:paused}
+  .o1,.o2,.o3{opacity:.25}
 }
+/* Honor reduced motion globally — also kills orb animation. */
+@media(prefers-reduced-motion:reduce){
+  .orb{animation:none !important}
+  .page,.quiz-card,.display-card,.right,header,.mobile-nav{animation:none !important}
+}
+
+/* ── Mathematical rendering: overflow handling ──
+   KaTeX renders math as a fixed-width block of inline spans. On narrow viewports
+   long expressions extend beyond the container; combined with `overflow-x:hidden`
+   on html/body, the right side of the equation gets silently CLIPPED. The
+   standard remedy (used by MathJax docs, Wikipedia, etc.) is to allow horizontal
+   scroll INSIDE the math container, so the user can pan to see the rest.
+   Applies to KaTeX-rendered surfaces site-wide. */
+.katex-display,
+.katex{
+  max-width:100%;
+}
+.katex-display{
+  /* Long display-mode equations get their own scroll context. The KaTeX
+     wrapper renders centered; padding-bottom keeps the scrollbar (when visible)
+     from clipping the descenders of integrals and radicals. */
+  overflow-x:auto;overflow-y:hidden;
+  -webkit-overflow-scrolling:touch;
+  padding:2px 0 4px;
+  /* Hide scrollbar visually but keep functionality. */
+  scrollbar-width:thin;
+}
+.katex-display::-webkit-scrollbar{height:3px}
+.katex-display::-webkit-scrollbar-thumb{background:var(--border2);border-radius:2px}
+/* Step-math / scan / explanation surfaces wrap KaTeX output. Ensure they don't
+   produce a body-level horizontal scroll: same overflow rule at the wrapper. */
+.step-math,.scan-extracted-text,.scan-sol-problem,.scan-sol-answer,.quiz-question{
+  max-width:100%;overflow-x:auto;overflow-y:hidden;
+  -webkit-overflow-scrolling:touch;
+}
+.step-math::-webkit-scrollbar,
+.quiz-question::-webkit-scrollbar{height:3px}
+.step-math::-webkit-scrollbar-thumb,
+.quiz-question::-webkit-scrollbar-thumb{background:var(--border2);border-radius:2px}
 
 /* Display */
 .display-card{
@@ -3525,7 +3649,13 @@ header{
   </div>
 </div>
 
-<!-- Mobile bottom navigation — only visible on small screens; mirrors the top nav for thumb reach -->
+<!-- Mobile bottom navigation — only visible on small screens; mirrors the top nav for thumb reach.
+     Tab order MUST match the desktop top-nav order exactly (Calc → Graph → Solver → Convert →
+     Practice → Scan → Formulas) so users carry a single mental model between devices. The
+     `_MNAV_TABS` manifest in the script section is the canonical source of truth and the
+     runtime self-heal reconciles this DOM against it on every page load / tab click.
+     Horizontally scrollable with snap points so all 7 tabs fit on every phone width.
+     Practice carries its own gold-accent class — it's the flagship tab and must stay reachable on mobile. -->
 <nav class="mobile-nav" id="mobile-nav" aria-label="Main">
   <button class="mnav-btn on" data-page="calc"     onclick="showPage('calc',null);syncMobileNav()"     aria-label="Calculator">
     <span class="mnav-icon">∫</span><span class="mnav-label" data-i18n="nav.calc">Calculator</span>
@@ -3535,6 +3665,12 @@ header{
   </button>
   <button class="mnav-btn"    data-page="solver"   onclick="showPage('solver',null);syncMobileNav()"   aria-label="Solver">
     <span class="mnav-icon">⊢</span><span class="mnav-label" data-i18n="nav.solver">Solver</span>
+  </button>
+  <button class="mnav-btn"    data-page="conv"     onclick="showPage('conv',null);syncMobileNav()"     aria-label="Converter">
+    <span class="mnav-icon">⇄</span><span class="mnav-label" data-i18n="nav.conv">Convert</span>
+  </button>
+  <button class="mnav-btn mnav-practice" data-page="practice" onclick="showPage('practice',null);syncMobileNav()" aria-label="Practice">
+    <span class="mnav-icon">✦</span><span class="mnav-label" data-i18n="nav.practice">Practice</span>
   </button>
   <button class="mnav-btn"    data-page="scan"     onclick="showPage('scan',null);syncMobileNav()"     aria-label="Scan">
     <span class="mnav-icon">📷</span><span class="mnav-label" data-i18n="nav.scan">Scan</span>
@@ -8473,10 +8609,24 @@ function setupMathField(originalInput, opts) {
     try { mf.spacebarKeypressSound = null; } catch(_) {}
     try { mf.returnKeypressSound   = null; } catch(_) {}
     try { mf.deleteKeypressSound   = null; } catch(_) {}
-    // Globally also: silence the MathLive virtual keyboard's sound bus.
+    // Globally also: silence the MathLive virtual keyboard's sound bus,
+    // and on mobile hide the bottom nav while the virtual keyboard is up so
+    // it doesn't sit awkwardly above (or get covered by) the keyboard surface.
     try {
       if (window.mathVirtualKeyboard) {
         window.mathVirtualKeyboard.soundsDirectory = null;
+        // Only attach once globally — guard with a flag on the keyboard object.
+        if (!window.mathVirtualKeyboard._mathixVisListenerWired) {
+          window.mathVirtualKeyboard._mathixVisListenerWired = true;
+          const syncNavForKb = () => {
+            const visible = !!window.mathVirtualKeyboard.visible;
+            document.body.classList.toggle('mlive-kb-up', visible);
+          };
+          try { window.mathVirtualKeyboard.addEventListener('geometrychange', syncNavForKb); } catch(_) {}
+          // Fallback poll: some versions fire only on certain events. Cheap because
+          // it's a single boolean check; ~5/sec is imperceptible.
+          setInterval(syncNavForKb, 200);
+        }
       }
     } catch(_) {}
 
@@ -8612,7 +8762,30 @@ function setupMathField(originalInput, opts) {
     });
     // Make the focus state propagate (so any focus-driven UI like the
     // adaptive-practice suggestion still works).
-    mf.addEventListener('focus', () => { try { originalInput.dispatchEvent(new Event('focus', { bubbles:true })); } catch(_) {} });
+    mf.addEventListener('focus', () => {
+      try { originalInput.dispatchEvent(new Event('focus', { bubbles:true })); } catch(_) {}
+      // On mobile, the MathLive virtual keyboard takes ~280-340px of the bottom of
+      // the screen. If the focused field is below the fold, scroll it into the
+      // upper half so the user can actually see what they're typing. Browsers
+      // don't auto-scroll math-fields the way they do native <input>s. Defer with
+      // rAF so MathLive can finish its own focus paint before we measure.
+      try {
+        if (matchMedia && matchMedia('(any-pointer: coarse)').matches) {
+          requestAnimationFrame(() => {
+            try {
+              const r = mf.getBoundingClientRect();
+              const vh = window.innerHeight || document.documentElement.clientHeight;
+              // If the field sits in the bottom half (likely covered by the kb)
+              // or below the visible area, scroll it into the top third where
+              // it'll remain visible above the keyboard.
+              if (r.bottom > vh * 0.55 || r.top < 0) {
+                mf.scrollIntoView({ block:'center', behavior:'smooth' });
+              }
+            } catch(_) {}
+          });
+        }
+      } catch(_) {}
+    });
     mf.addEventListener('blur',  () => { try { originalInput.dispatchEvent(new Event('blur',  { bubbles:true })); } catch(_) {} });
 
     // Tune virtual-keyboard behavior: auto on touch devices; manual on
@@ -8832,12 +9005,121 @@ function showPage(id, btn) {
   try { track('page_view', { page: id }); } catch(e) {}
 }
 
-function syncMobileNav(activeId) {
-  const id = activeId || (document.querySelector('.page.active')?.id?.replace(/^page-/, ''));
-  document.querySelectorAll('.mnav-btn').forEach(b => {
-    b.classList.toggle('on', b.dataset.page === id);
-    b.setAttribute('aria-current', b.dataset.page === id ? 'page' : 'false');
+// ── Mobile nav: canonical tab manifest ──
+// Single source of truth for what the mobile bottom nav contains.
+// `_ensureMobileNav()` reconciles the actual DOM against this list on every
+// `syncMobileNav` call. If a tab is missing (e.g. an old service-worker-cached
+// HTML is still being served), we inject it on the fly. If a tab is present
+// but out of order, we re-order. This makes the nav self-healing regardless of
+// which version of the HTML is currently in the cache — Practice can NEVER be
+// missing once this code runs, even if the user's browser is serving a stale
+// index.html that pre-dated the Practice button.
+// Order matches the desktop top-nav exactly (see <nav class="nav"> in the
+// header) so the user's mental model is identical across devices:
+//   Calculator → Graphing → Solver → Converter → Practice → Scan → Formulas
+const _MNAV_TABS = [
+  { page:'calc',     icon:'∫',  label:'Calculator', i18n:'nav.calc',     extraClass:'' },
+  { page:'graph',    icon:'📈', label:'Graph',      i18n:'nav.graph',    extraClass:'' },
+  { page:'solver',   icon:'⊢',  label:'Solver',     i18n:'nav.solver',   extraClass:'' },
+  { page:'conv',     icon:'⇄',  label:'Convert',    i18n:'nav.conv',     extraClass:'' },
+  { page:'practice', icon:'✦',  label:'Practice',   i18n:'nav.practice', extraClass:'mnav-practice' },
+  { page:'scan',     icon:'📷', label:'Scan',       i18n:'nav.scan',     extraClass:'' },
+  { page:'formulas', icon:'⚗',  label:'Formulas',   i18n:'nav.formulas', extraClass:'' },
+];
+
+function _buildMnavBtn(tab) {
+  const btn = document.createElement('button');
+  btn.className = 'mnav-btn' + (tab.extraClass ? (' ' + tab.extraClass) : '');
+  btn.dataset.page = tab.page;
+  btn.setAttribute('aria-label', tab.label);
+  btn.setAttribute('type', 'button');
+  btn.addEventListener('click', () => {
+    try { showPage(tab.page, null); } catch(_) {}
+    try { syncMobileNav(tab.page); } catch(_) {}
   });
+  const icon = document.createElement('span');
+  icon.className = 'mnav-icon';
+  icon.textContent = tab.icon;
+  const label = document.createElement('span');
+  label.className = 'mnav-label';
+  label.setAttribute('data-i18n', tab.i18n);
+  label.textContent = tab.label;
+  btn.appendChild(icon);
+  btn.appendChild(label);
+  return btn;
+}
+
+function _ensureMobileNav() {
+  const nav = document.getElementById('mobile-nav');
+  if (!nav) return;
+  // Build the canonical lookup of what's currently in the DOM.
+  const existing = new Map();
+  nav.querySelectorAll('.mnav-btn').forEach(b => {
+    if (b.dataset && b.dataset.page) existing.set(b.dataset.page, b);
+  });
+  // Walk the manifest in order. Each tab must either already exist (and be in
+  // the right position) or be created. We append in-order, then remove any
+  // unknown leftovers — cheap because the list is tiny (7 items).
+  const finalOrder = [];
+  for (const tab of _MNAV_TABS) {
+    let btn = existing.get(tab.page);
+    if (!btn) {
+      btn = _buildMnavBtn(tab);
+    } else {
+      // Make sure the practice-accent class is present on cached buttons too.
+      if (tab.extraClass && !btn.classList.contains(tab.extraClass)) {
+        btn.classList.add(tab.extraClass);
+      }
+    }
+    finalOrder.push(btn);
+  }
+  // Re-attach in canonical order. This is a no-op when DOM already matches,
+  // and a clean re-order/inject otherwise.
+  let dirty = false;
+  if (nav.children.length !== finalOrder.length) {
+    dirty = true;
+  } else {
+    for (let i = 0; i < finalOrder.length; i++) {
+      if (nav.children[i] !== finalOrder[i]) { dirty = true; break; }
+    }
+  }
+  if (dirty) {
+    // Detach everything, then re-append in canonical order.
+    while (nav.firstChild) nav.removeChild(nav.firstChild);
+    for (const el of finalOrder) nav.appendChild(el);
+    // Run any registered i18n translator over the freshly-built labels so
+    // the language stays consistent.
+    try { if (typeof applyTranslations === 'function') applyTranslations(); } catch(_) {}
+  }
+}
+
+function syncMobileNav(activeId) {
+  // Self-heal first — guarantees Practice (and every other tab) is in the DOM
+  // before we mark the active one.
+  try { _ensureMobileNav(); } catch(_) {}
+  const id = activeId || (document.querySelector('.page.active')?.id?.replace(/^page-/, ''));
+  let active = null;
+  document.querySelectorAll('.mnav-btn').forEach(b => {
+    const on = b.dataset.page === id;
+    b.classList.toggle('on', on);
+    b.setAttribute('aria-current', on ? 'page' : 'false');
+    if (on) active = b;
+  });
+  // When the active tab sits off-screen in the scrollable mobile nav (e.g. user
+  // landed on Practice via deep-link on a narrow phone), bring it into view so
+  // they always see "where they are" without having to scroll the nav manually.
+  if (active && active.scrollIntoView) {
+    try { active.scrollIntoView({ inline:'center', block:'nearest', behavior:'smooth' }); } catch(_) {}
+  }
+}
+
+// Eager self-heal: run as soon as DOM is parsed so a freshly-loaded page that
+// was served from stale cache immediately picks up the canonical nav. This is
+// idempotent — running it before/after syncMobileNav doesn't double-add tabs.
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', () => { try { _ensureMobileNav(); } catch(_) {} });
+} else {
+  try { _ensureMobileNav(); } catch(_) {}
 }
 
 function initScan() {
